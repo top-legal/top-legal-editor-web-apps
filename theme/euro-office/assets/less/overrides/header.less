@@ -15,11 +15,12 @@
   }
 }
 
-// Document editor
+// Document editor — top.legal: show the top.legal wordmark (86×20) instead of the doc icon
 body[data-editor-type="document"] {
   .extra #header-logo i,
   .extra #header-logo.logo-light i {
-    background-image: ~"url('@{common-image-const-path}/header/icon-document.svg')";
+    width: 86px;
+    background-image: ~"url('@{common-image-const-path}/header/header-logo_s.svg')";
   }
 
   &.theme-light,
@@ -29,7 +30,8 @@ body[data-editor-type="document"] {
   &.theme-night {
     .extra #header-logo i,
     .extra #header-logo.logo-light i {
-      background-image: ~"url('@{common-image-const-path}/header/icon-document-white.svg')";
+      width: 86px;
+      background-image: ~"url('@{common-image-const-path}/header/header-logo_s.svg')";
     }
   }
 }

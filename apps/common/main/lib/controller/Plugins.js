@@ -54,10 +54,11 @@ define([
                         var appOptions = me.getApplication().getController('Main').appOptions;
 
                         if ( !appOptions.isEditMailMerge && !appOptions.isEditDiagram && !appOptions.isEditOle ) {
-                            var tab = {action: 'plugins', caption: me.viewPlugins.groupCaption, dataHintTitle: 'E', layoutname: 'toolbar-plugins'};
+                            // top.legal: the generic Plugins ribbon tab is hidden — style
+                            // presets live in our native "Style" tab (controller/StyleTab.js).
+                            // Keep the panel built so any plugin can still run as a side panel.
                             me.$toolbarPanelPlugins = me.viewPlugins.getPanel();
                             me.toolbar = toolbar;
-                            toolbar.addTab(tab, me.$toolbarPanelPlugins, Common.UI.LayoutManager.lastTabIdx);     // TODO: clear plugins list in left panel
                         }
                     },
                     'tab:active': this.onActiveTab

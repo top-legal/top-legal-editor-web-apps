@@ -1,7 +1,7 @@
 <!doctype html>
 <html>
 <head>
-    <title>ONLYOFFICE Documents</title>
+    <title>top.legal</title>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=IE8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
@@ -25,6 +25,45 @@
             background-color: #f4f4f4;
             z-index: 1002;
         }
+        /* top.legal branded loader */
+        .eo-loader {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            -webkit-transform: translate(-50%, -50%);
+            transform: translate(-50%, -50%);
+            text-align: center;
+            font-family: Arial, Helvetica, "Helvetica Neue", sans-serif;
+        }
+        .eo-loader .eo-logo {
+            width: 220px;
+            max-width: 60vw;
+            margin: 0 auto 24px;
+        }
+        .eo-loader .eo-logo svg { display: block; width: 100%; height: auto; }
+        .eo-dots {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 16px;
+        }
+        .eo-dots span {
+            width: 11px;
+            height: 11px;
+            margin: 0 5px;
+            border-radius: 50%;
+            background: #3DBD7D;
+            display: inline-block;
+            -webkit-animation: eobounce 1.4s infinite ease-in-out both;
+            animation: eobounce 1.4s infinite ease-in-out both;
+        }
+        .eo-dots span:nth-child(1) { -webkit-animation-delay: -0.32s; animation-delay: -0.32s; }
+        .eo-dots span:nth-child(2) { -webkit-animation-delay: -0.16s; animation-delay: -0.16s; }
+        @-webkit-keyframes eobounce { 0%,80%,100% { -webkit-transform: scale(0); opacity: .35; } 40% { -webkit-transform: scale(1); opacity: 1; } }
+        @keyframes eobounce { 0%,80%,100% { transform: scale(0); opacity: .35; } 40% { transform: scale(1); opacity: 1; } }
+        .eo-loader .loader-page-text { position: static; color: #5a6b7b; }
+        .eo-loader .loader-page-text-customer { color: #12243C; }
+        .theme-dark .loadmask { background-color: #1b2733; }
+        .theme-dark .eo-loader .loader-page-text { color: rgba(255, 255, 255, 0.85); }
         .loader-page {
             width: 100%;
             height: 170px;
@@ -214,12 +253,25 @@
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
         }
+        // top.legal wordmark (inlined so the loader needs no external asset)
+        var EO_LOGO = '<div class="eo-logo"><svg viewBox="0 0 298 67" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+            '<path d="M127 41.9058H119V49.9058H127V41.9058Z" fill="#3DBD7D"/>' +
+            '<rect x="19.7" y="9.39999" width="8" height="8" fill="#3DBD7D"/>' +
+            '<path fill-rule="evenodd" clip-rule="evenodd" d="M16.3015 0.972382L0 17.3457H2.38559H5.36758H9.54236V35.9155C9.54236 38.3116 9.93995 40.508 10.5364 42.3051C11.1327 44.1022 12.1267 45.4999 13.3195 46.698C14.5123 47.896 15.9039 48.6947 17.4943 49.0941C19.0847 49.6931 21.0727 49.8928 23.0607 49.8928H23.8559H28.2295V43.3035H23.8559C21.4703 43.3035 19.6811 42.7045 18.2895 41.5064C16.8979 40.3084 16.3015 38.3116 16.3015 35.5162V17.3457V10.9561V0.972382Z" fill="#12243C"/>' +
+            '<path d="M50.8973 49.6477C42.9901 49.6477 36.2689 44.6606 36.2689 35.0855V25.5103C36.2689 15.9352 42.5947 10.7487 51.4903 10.7487H55.2462C63.9442 10.7487 70.0723 15.7357 70.0723 25.5103V35.0855C70.0723 44.6606 63.3511 49.6477 55.2462 49.6477H50.8973ZM51.2926 17.1321C46.5483 17.1321 43.1877 19.7254 43.1877 25.5103V35.0855C43.1877 40.4715 46.5483 43.0648 51.2926 43.0648H55.0485C59.7929 43.0648 63.3511 40.4715 63.3511 35.0855V25.5103C63.3511 19.7254 59.7929 17.1321 55.0485 17.1321H51.2926Z" fill="#12243C"/>' +
+            '<path d="M96.3637 10.7487C105.259 10.7487 111.387 15.7357 111.387 25.1114V34.886C111.387 44.6606 105.062 49.6476 96.5614 49.6476H84.1075V66.8333C80.7634 66.8333 82.7238 66.8333 80.3516 66.8333C77.9794 66.8333 79.4356 66.8333 77.1887 66.8333V14.5388C77.1887 12.943 78.1771 10.7487 80.3516 10.7487H96.3637ZM104.666 25.5103C104.666 20.1243 101.108 17.5311 96.3637 17.5311H84.1075V43.0648H96.3637C101.108 43.0648 104.666 40.4715 104.666 34.886V25.5103Z" fill="#12243C"/>' +
+            '<path d="M141.721 36.0829C141.721 40.272 143.5 43.2642 148.047 43.2642H152C152 45.25 152 44.2617 152 46.456C152 48.6503 152 48.75 152 49.8471H147.849C139.547 49.8471 135 45.4585 135 36.0829V0.333319C138.253 0.333348 136.464 0.333313 138.836 0.333313C141.011 0.333313 138.836 0.333306 141.721 0.333319V36.0829Z" fill="#12243C"/>' +
+            '<path d="M162.675 33.6891V35.4845C162.675 40.272 166.234 43.2643 170.978 43.2643H185.409C185.409 44.6667 185.409 44.0622 185.409 46.456C185.409 48.6503 185.409 48.75 185.409 49.8472H170.583C162.28 49.8472 155.954 44.6606 155.954 35.4845V26.1088C155.954 16.5337 162.675 11.1477 171.176 11.1477H174.141C182.048 11.1477 188.967 16.3342 188.967 26.1088V30.2979C188.967 31.6943 188.176 34.0881 185.211 34.0881H162.675V33.6891ZM182.048 25.7099C182.048 19.9249 178.292 17.5311 173.745 17.5311H170.78C166.431 17.5311 162.675 20.1244 162.675 25.7099V27.9042H182.048V25.7099Z" fill="#12243C"/>' +
+            '<path d="M229.689 52.2409C229.689 61.6166 223.363 66.6036 214.665 66.6036H199.641C199.641 64.5 199.641 65.6062 199.641 63.2124C199.641 60.8186 199.641 62.75 199.641 60.0207H214.665C219.409 60.0207 222.968 57.6269 222.968 52.0414V49.4482H210.514C202.014 49.4482 195.688 44.4611 195.688 34.6865V25.1114C195.688 15.5363 202.211 10.7487 210.712 10.7487H226.526C228.7 10.7487 229.887 12.943 229.887 14.5388L229.689 52.2409ZM202.409 34.6865C202.409 40.4715 205.967 42.8653 210.712 42.8653H222.968V17.3316H210.712C205.967 17.3316 202.409 19.9249 202.409 25.3109V34.6865Z" fill="#12243C"/>' +
+            '<path d="M271.597 45.8575C271.597 47.4534 270.411 49.6477 268.434 49.6477H247.48C241.747 49.6477 237.003 45.2591 237.003 38.0777V37.0803C237.003 31.6943 240.759 26.1088 248.073 26.1088H264.876V24.7124C264.876 20.5233 262.306 17.3316 256.969 17.3316H243.329C243.329 16.0833 243.329 16.5337 243.329 14.3394C243.329 11.9456 243.329 12 243.329 10.9482H257.364C266.655 10.9482 271.795 16.1347 271.795 25.3109L271.597 45.8575ZM249.655 32.4922C246.689 32.4922 243.724 33.8886 243.724 37.2798V37.8782C243.724 41.4689 246.294 43.0648 249.655 43.0648H264.678V32.4922H249.655Z" fill="#12243C"/>' +
+            '<path d="M287.609 36.0829C287.609 40.272 289.388 43.2642 293.935 43.2642L297.889 43.2642C297.889 46.456 297.889 44.2617 297.889 46.456C297.889 48.6503 297.889 47.5833 297.889 49.8471H293.737C285.435 49.8471 280.888 45.4585 280.888 36.0829L280.888 0.333325C283.503 0.333338 281.714 0.333331 284.086 0.333331C286.261 0.333331 284.67 0.333298 287.609 0.333325V36.0829Z" fill="#12243C"/>' +
+            '</svg></div>';
         var params = getUrlParams(),
             lang = (params["lang"] || 'en').split(/[\-\_]/)[0],
             customer = params["customer"] ? ('<div class="loader-page-text-customer">' + encodeUrlParam(params["customer"]) + '</div>') : '',
             margin = (customer !== '') ? 50 : 20,
             loading = 'Loading...',
-            logo = params["logo"] ? ((params["logo"] !== 'none') ? ('<img src="' + encodeUrlParam(params["logo"]) + '" class="loader-logo" />') : '') : null,
+            logo = params["logo"] ? ((params["logo"] !== 'none') ? ('<div class="eo-logo"><img src="' + encodeUrlParam(params["logo"]) + '" style="width:100%;height:auto;" /></div>') : '') : EO_LOGO,
             isForm = params["isForm"]==='true';
         window.frameEditorId = params["frameEditorId"];
         window.parentOrigin = params["parentOrigin"];
@@ -247,16 +299,12 @@
         if ( !stopLoading )
             document.write(
                 '<div id="loading-mask" class="loadmask">' +
-                '<div class="loader-page" style="margin-bottom: ' + margin + 'px;' + ((logo!==null) ? 'height: auto;' : '') + '">' +
-                ((logo!==null) ? logo :
-                '<div class="loader-page-romb">' +
-                '<div class="romb" id="blue"></div>' +
-                '<div class="romb" id="green"></div>' +
-                '<div class="romb" id="red"></div>' +
-                '</div>') +
-                '</div>' +
+                '<div class="eo-loader">' +
+                logo +
+                '<div class="eo-dots"><span></span><span></span><span></span></div>' +
                 '<div class="loader-page-text">' + customer +
                 '<div class="loader-page-text-loading">' + loading + '</div>' +
+                '</div>' +
                 '</div>' +
                 '</div>');
     </script>

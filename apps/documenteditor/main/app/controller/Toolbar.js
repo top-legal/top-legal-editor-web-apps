@@ -3972,6 +3972,20 @@ define([
                 }
                 Array.prototype.push.apply(me.toolbar.lockControls, headerfootertab.getView('HeaderFooterTab').getButtons());
 
+                // top.legal — native "Style" ribbon tab (style-preset gallery)
+                if ( config.isEdit ) {
+                    var styletab = application.getController('StyleTab');
+                    if ( styletab ) {
+                        styletab.setApi(me.api).setConfig({toolbar: me, mode: config});
+                        $panel = styletab.createToolbarPanel();
+                        if ($panel) {
+                            tab = {action: 'style', caption: 'Style', extcls: 'canedit', layoutname: 'toolbar-style', dataHintTitle: 'S'};
+                            me.toolbar.addTab(tab, $panel, 1);   // right after Home
+                            me.toolbar.setVisible('style', true);
+                        }
+                    }
+                }
+
                 if ( config.canProtect) {
                     tab = {action: 'protect', caption: me.toolbar.textTabProtect, layoutname: 'toolbar-protect', dataHintTitle: 'T'};
                     $panel = application.getController('Common.Controllers.Protection').createToolbarPanel();

@@ -8,7 +8,7 @@
         <button id="left-btn-navigation" class="btn btn-category" data-hint="0" data-hint-direction="right" data-hint-offset="big" content-target="" data-layout-name="leftMenu-navigation"><svg class="icon uni-scale"><use href="#btn-menu-navigation"></use></svg></button>
         <button id="left-btn-thumbnails" class="btn btn-category" data-hint="0" data-hint-direction="right" data-hint-offset="big" content-target=""><svg class="icon uni-scale"><use href="#btn-menu-thumbs"></use></svg></button>
         <button id="left-btn-support" class="btn btn-category" data-hint="0" data-hint-direction="right" data-hint-offset="big" content-target=""><svg class="icon uni-scale"><use href="#btn-menu-support"></use></svg></button>
-        <button id="left-btn-about" class="btn btn-category" data-hint="0" data-hint-direction="right" data-hint-offset="big" content-target=""><svg class="icon uni-scale"><use href="#btn-menu-about"></use></svg></button>
+        <button id="left-btn-about" class="btn btn-category" style="display:none" data-hint="0" data-hint-direction="right" data-hint-offset="big" content-target=""><svg class="icon uni-scale"><use href="#btn-menu-about"></use></svg></button>
         <div id="slot-left-menu-more"></div>
     </div>
     <div class="left-panel side-panel" style="">
