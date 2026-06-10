@@ -215,7 +215,74 @@ define([
             this.isModeChanged = true; // change show-comment mode from/to hint mode using canComments flag
             this.view.viewmode = !this.mode.canComments;
             this.view.changeLayout(mode);
+            this.eoInjectCss();      // top.legal: comment scope theming
+            this.eoFetchScopes();    // top.legal: load guid->scope map for this doc
+            this.eoBindScopeSelect(); // top.legal: capture scope choice (survives re-renders)
             return this;
+        },
+
+        // ---- top.legal: team-scoped comments (Phase 1) ------------------------
+        eoBackendBase: function () {
+            var o = window.location.origin;
+            return (o.indexOf('localhost') >= 0 || o.indexOf('127.0.0.1') >= 0) ? 'http://localhost:3001' : o + '/api';
+        },
+        eoDocId: function () {
+            try { if (this.api && this.api.asc_getDocumentName) return this.api.asc_getDocumentName() || 'doc'; } catch (e) { }
+            return (this.mode && (this.mode.docId || this.mode.fileName)) || 'doc';
+        },
+        eoSaveScope: function (guid, scope) {
+            var me = this;
+            try {
+                fetch(me.eoBackendBase() + '/comments?docId=' + encodeURIComponent(me.eoDocId()), {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ guid: guid, scope: scope })
+                }).catch(function () { });
+            } catch (e) { }
+        },
+        eoFetchScopes: function () {
+            var me = this;
+            if (me._eoScopesLoaded) return;
+            me._eoScopesLoaded = true;
+            me._eoScopeMap = me._eoScopeMap || {};
+            try {
+                fetch(me.eoBackendBase() + '/comments?docId=' + encodeURIComponent(me.eoDocId()))
+                    .then(function (r) { return r.ok ? r.json() : {}; })
+                    .then(function (map) { me._eoScopeMap = map || {}; me.eoApplyScopesToCollections(); })
+                    .catch(function () { });
+            } catch (e) { }
+        },
+        eoApplyScopesToCollections: function () {
+            var me = this, map = me._eoScopeMap || {};
+            var dec = function (c) { var g = c.get('guid'); c.set('eoScope', (g && map[g]) || 'shared', { silent: true }); };
+            if (me.collection) me.collection.each(dec);
+            for (var k in me.groupCollection) { if (me.groupCollection.hasOwnProperty(k) && me.groupCollection[k]) me.groupCollection[k].each(dec); }
+            me.updateComments && me.updateComments(true);
+        },
+        eoInjectCss: function () {
+            if (document.getElementById('eo-comments-css')) return;
+            var css =
+                '.user-comment-item.eo-scope-internal{border-left:3px solid #d9534f;}' +
+                '.user-comment-item.eo-scope-external{border-left:3px solid #4a90d9;}' +
+                '.user-comment-item.eo-scope-shared{border-left:3px solid #3DBD7D;}' +
+                '.eo-scope-badge{display:inline-block;font-size:9px;line-height:13px;padding:0 5px;margin-left:6px;border-radius:7px;vertical-align:middle;font-weight:600;color:#fff;}' +
+                '.eo-scope-badge-internal{background:#d9534f;}' +
+                '.eo-scope-badge-external{background:#4a90d9;}' +
+                '.eo-scope-badge-shared{background:#3DBD7D;}' +
+                '.eo-scope-row{display:flex;align-items:center;margin:4px 0 6px;}' +
+                '.eo-scope-label{font-size:11px;color:#666;margin-right:6px;}' +
+                '.eo-scope-select{flex:1 1 auto;height:24px;border:1px solid #cfcfcf;border-radius:2px;background:#fff;padding:0 4px;}';
+            var st = document.createElement('style');
+            st.id = 'eo-comments-css'; st.type = 'text/css'; st.innerHTML = css;
+            document.getElementsByTagName('head')[0].appendChild(st);
+        },
+        eoBindScopeSelect: function () {
+            if (this._eoScopeBound) return;
+            this._eoScopeBound = true;
+            this._eoCurrentScope = this._eoCurrentScope || 'shared';
+            var me = this;
+            // Delegated so it survives popover/panel re-renders and ignores stale nodes:
+            // whichever scope <select> the user changes becomes the choice for the next add.
+            $(document).on('change', '.eo-scope-select', function () { me._eoCurrentScope = this.value || 'shared'; });
         },
         //
 
@@ -277,6 +344,11 @@ define([
                     if (!_.isUndefined(comment.asc_putDocumentFlag)) {
                         comment.asc_putDocumentFlag(documentFlag);
                     }
+
+                    // top.legal: scope captured by the delegated change listener. The new
+                    // comment's guid isn't known until the SDK echoes it back via
+                    // onApiAddComment, so we stash the scope and stamp it there.
+                    this._eoPendingScope = this._eoCurrentScope || 'shared';
 
                     this.api.asc_addComment(comment);
                     this.view.showEditContainer(false);
@@ -661,6 +733,18 @@ define([
             var requestObj = {},
                 comment = this.readSDKComment(id, data, requestObj);
             if (comment) {
+                // top.legal: if this is the comment we just created, stamp its chosen
+                // scope onto the model + the local map, and persist {guid, scope}.
+                if (this._eoPendingScope) {
+                    var eoGuid = comment.get('guid');
+                    comment.set('eoScope', this._eoPendingScope, { silent: true });
+                    if (eoGuid) {
+                        this._eoScopeMap = this._eoScopeMap || {};
+                        this._eoScopeMap[eoGuid] = this._eoPendingScope;
+                        this.eoSaveScope(eoGuid, this._eoPendingScope);
+                    }
+                    this._eoPendingScope = null;
+                }
                 if (comment.get('groupName')) {
                     this.addCommentToGroupCollection(comment);
                     (_.indexOf(this.collection.groups, comment.get('groupName'))>-1) && this.collection.push(comment);
@@ -1308,6 +1392,7 @@ define([
             var comment = new Common.Models.Comment({
                 uid                 : id,
                 guid                : data.asc_getGuid(),
+                eoScope             : (this._eoScopeMap && this._eoScopeMap[data.asc_getGuid()]) || 'shared',   // top.legal: null/unknown => shared
                 userid              : userid,
                 username            : data.asc_getUserName(),
                 initials            : Common.Utils.getUserInitials(AscCommon.UserInfoParser.getParsedName(data.asc_getUserName())),
@@ -1399,6 +1484,7 @@ define([
 
         addDummyComment: function () {
             if (this.api) {
+                this._eoCurrentScope = 'shared';   // top.legal: each new comment starts at the safe default
                 var me = this, anchor = null, date = new Date(), dialog = this.getPopover();
                 if (dialog) {
                     if (this.popoverComments.length) {// can add new comment to text with other comments
@@ -1489,6 +1575,9 @@ define([
 
                     if (!_.isUndefined(comment.asc_putDocumentFlag))
                         comment.asc_putDocumentFlag(false);
+
+                    // top.legal: scope captured by the delegated change listener.
+                    this._eoPendingScope = this._eoCurrentScope || 'shared';
 
                     this.api.asc_addComment(comment);
                     this.view.showEditContainer(false);

@@ -1,18 +1,18 @@
 <% if (!hide) { %>
-<div id="<%=id%>" class="user-comment-item">
+<div id="<%=id%>" class="user-comment-item eo-scope-<%= (typeof eoScope !== 'undefined' && eoScope) ? eoScope : 'shared' %>">
 
     <!-- comment block -->
 
     <div class="user-info">
-        <div class="color" 
+        <div class="color"
             <% if (avatar) { %>
-                style="background-image: url(<%=avatar%>); <% if (usercolor!==null) { %> border-color:<%=usercolor%>; border-style:solid;<% }%>" 
+                style="background-image: url(<%=avatar%>); <% if (usercolor!==null) { %> border-color:<%=usercolor%>; border-style:solid;<% }%>"
             <% } else { %>
-                style="background-color: <% if (usercolor!==null) { %> <%=usercolor%> <% } else { %> #cfcfcf <% }%>;" 
+                style="background-color: <% if (usercolor!==null) { %> <%=usercolor%> <% } else { %> #cfcfcf <% }%>;"
             <% } %>
         ><% if (!avatar) { %><%-initials%><% } %></div>
         <div class="user-info-text">
-            <div class="user-name"><%= scope.getEncodedName(parsedName) %></div>
+            <div class="user-name"><%= scope.getEncodedName(parsedName) %><span class="eo-scope-badge eo-scope-badge-<%= (typeof eoScope !== 'undefined' && eoScope) ? eoScope : 'shared' %>"><%= ((typeof eoScope !== 'undefined' && eoScope) ? eoScope : 'shared').charAt(0).toUpperCase() + ((typeof eoScope !== 'undefined' && eoScope) ? eoScope : 'shared').slice(1) %></span></div>
             <div class="user-date"><%=date%></div>
         </div>
     </div>
@@ -21,6 +21,9 @@
     <% } else { %>
         <div class="inner-edit-ct">
             <textarea class="msg-reply user-select" maxlength="maxCommLength" spellcheck="false" <% if (!!dummy) { %> placeholder="textMentionComment"<% } %> aria-label="textComment"><%-comment%></textarea>
+            <% if (hideAddReply) { %>
+                <div class="eo-scope-row"><span class="eo-scope-label">Visible to:</span><select class="eo-scope-select eo-scope-popover"><option value="shared">Both teams (shared)</option><option value="internal">Internal team only</option><option value="external">External team only</option></select></div>
+            <% } %>
             <% if (hideAddReply) { %>
                 <button class="btn normal dlg-btn primary btn-inner-edit" id="id-comments-change-popover">textAdd</button>
             <% } else { %>

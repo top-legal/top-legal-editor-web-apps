@@ -70,6 +70,7 @@ define([
             replys              : [],
             hideAddReply        : false,
             scope               : null,
+            eoScope             : 'shared',   // top.legal team scope: internal|external|shared (null group => shared)
             hide                : false,
             filtered            : false,
             hint                : false,

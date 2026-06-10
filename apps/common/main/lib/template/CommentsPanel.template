@@ -7,6 +7,7 @@
         <div class="inner-ct">
             <textarea id="comment-msg-new" class="user-select textarea-control" placeholder="<%=textEnterCommentHint%>" maxlength="<%=maxCommLength%>" data-hint="1" data-hint-direction="left-top" aria-label="<%=textEnterCommentHint%>"></textarea>
         </div>
+        <div class="eo-scope-row"><span class="eo-scope-label">Visible to:</span><select id="comment-scope-new" class="eo-scope-select"><option value="shared">Both teams (shared)</option><option value="internal">Internal team only</option><option value="external">External team only</option></select></div>
         <button class="btn add normal dlg-btn primary" data-hint="1" data-hint-direction="bottom" data-hint-offset="big" style="width: auto;min-width: 86px;"><%=textAddComment%></button>
         <button class="btn cancel normal dlg-btn" data-hint="1" data-hint-direction="bottom" data-hint-offset="big" style="width: auto;min-width: 86px;"><%=textCancel%></button>
     </div>
