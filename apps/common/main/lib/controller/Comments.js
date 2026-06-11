@@ -255,24 +255,36 @@ define([
             this._eoScopeBound = true;
             this._eoCurrentScope = this._eoCurrentScope || 'shared';
             var me = this;
-            // Add-form scope select (new comment): capture the choice (delegated → survives re-renders).
-            $(document).on('change', '.eo-scope-select', function () { me._eoCurrentScope = this.value || 'shared'; });
-            // Existing comment: click the colored scope badge to cycle Shared -> Internal -> External.
-            $(document).on('click', '.eo-scope-badge-btn', function (e) {
+            // Capture phase (3rd arg true) so the comment card / popover handlers can't
+            // swallow these before us — bubble-phase delegation was being intercepted.
+            document.addEventListener('change', function (e) {
+                var t = e.target;
+                if (t && t.classList && t.classList.contains('eo-scope-select')) {
+                    me._eoCurrentScope = t.value || 'shared';
+                }
+            }, true);
+            document.addEventListener('click', function (e) {
+                var t = e.target;
+                var badge = (t && t.closest) ? t.closest('.eo-scope-badge-btn') : null;
+                if (!badge) return;
                 e.stopPropagation(); e.preventDefault();
                 var order = ['shared', 'internal', 'external'];
-                var cur = $(this).attr('data-scope') || 'shared';
-                me.eoChangeScope($(this).attr('data-uid'), order[(order.indexOf(cur) + 1) % order.length]);
-            });
+                var cur = badge.getAttribute('data-scope') || 'shared';
+                me.eoChangeScope(badge.getAttribute('data-uid'), order[(order.indexOf(cur) + 1) % order.length]);
+            }, true);
         },
         eoChangeScope: function (uid, scope) {
             if (!uid || !this.api) return;
             var comment = this.findComment(uid) || (this.findCommentInGroup && this.findCommentInGroup(uid));
-            if (!comment) return;
-            comment.set('eoScope', scope, { silent: true });
-            comment.set('userdata', this.eoEncodeScope(comment.get('userdata'), scope), { silent: true });
-            var asc = this.buildComment(comment);
-            if (asc) this.api.asc_changeComment(uid, asc);   // persist scope into the comment's userData
+            var pop = (this.popoverComments && this.popoverComments.findWhere) ? this.popoverComments.findWhere({ uid: uid }) : null;
+            var src = comment || pop;
+            if (!src) return;
+            var ud = this.eoEncodeScope(src.get('userdata'), scope);
+            // keep sidebar + popover models in sync
+            if (comment) { comment.set('eoScope', scope, { silent: true }); comment.set('userdata', ud, { silent: true }); }
+            if (pop)     { pop.set('eoScope', scope, { silent: true });     pop.set('userdata', ud, { silent: true }); }
+            var asc = this.buildComment(src);
+            if (asc) this.api.asc_changeComment(uid, asc);   // persist into userData (echoes via onApiChangeCommentData)
             this.updateComments(true);
         },
         //
@@ -832,6 +844,7 @@ define([
                 comment.set('resolved', data.asc_getSolved());
                 comment.set('quote',    data.asc_getQuoteText());
                 comment.set('userdata', data.asc_getUserData());
+                comment.set('eoScope',  this.eoDecodeScope(data.asc_getUserData()));   // top.legal: refresh scope badge on any change
                 comment.set('time',     date ? date.getTime() : null);
                 comment.set('date',     date ? t.dateToLocaleTimeString(date) : null);
                 comment.set('editable', (t.mode.canEditComments || (userid == t.currentUserId)) && AscCommon.UserInfoParser.canEditComment(data.asc_getUserName()));
