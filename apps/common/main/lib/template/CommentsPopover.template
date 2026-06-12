@@ -12,7 +12,7 @@
             <% } %>
         ><% if (!avatar) { %><%-initials%><% } %></div>
         <div class="user-info-text">
-            <div class="user-name"><%= scope.getEncodedName(parsedName) %><% var _eos=(typeof eoScope!=='undefined'&&eoScope)?eoScope:'shared'; var _euid=(typeof uid!=='undefined')?uid:''; var _eed=(typeof editable==='undefined'||editable); %><span class="eo-scope-badge eo-scope-badge-<%= _eos %><% if(_eed){ %> eo-scope-badge-btn<% } %>"<% if(_eed){ %> data-uid="<%= _euid %>" data-scope="<%= _eos %>" title="Click to change visibility (Shared / Internal / External)"<% } %>><%= _eos.charAt(0).toUpperCase()+_eos.slice(1) %></span></div>
+            <div class="user-name eo-has-badge"><span class="eo-name"><%= scope.getEncodedName(parsedName) %></span><% var _eos=(typeof eoScope!=='undefined'&&eoScope)?eoScope:'shared'; var _euid=(typeof uid!=='undefined')?uid:''; %><span class="eo-scope-badge eo-scope-badge-<%= _eos %> eo-scope-badge-btn" data-uid="<%= _euid %>" data-scope="<%= _eos %>" title="Click to change visibility (Shared / Internal / External)"><%= _eos.charAt(0).toUpperCase()+_eos.slice(1) %></span></div>
             <div class="user-date"><%=date%></div>
         </div>
     </div>

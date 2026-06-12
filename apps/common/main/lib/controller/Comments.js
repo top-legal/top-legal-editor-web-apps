@@ -243,6 +243,10 @@ define([
                 '.eo-scope-badge{display:inline-block;font-size:9px;line-height:14px;padding:0 6px;margin-left:6px;border-radius:8px;vertical-align:middle;font-weight:600;color:#fff;white-space:nowrap;}' +
                 '.eo-scope-badge-internal{background:#d9534f;}.eo-scope-badge-external{background:#4a90d9;}.eo-scope-badge-shared{background:#3DBD7D;}' +
                 '.eo-scope-badge-btn{cursor:pointer;}.eo-scope-badge-btn:hover{opacity:.85;box-shadow:0 0 0 1px rgba(0,0,0,.15) inset;}' +
+                // keep the badge out of the name's ellipsis-truncation: name shrinks, badge stays
+                '.user-name.eo-has-badge{display:flex;align-items:center;min-width:0;}' +
+                '.user-name.eo-has-badge .eo-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}' +
+                '.user-name.eo-has-badge .eo-scope-badge{flex:0 0 auto;}' +
                 '.eo-scope-row{display:flex;align-items:center;margin:4px 0 6px;}' +
                 '.eo-scope-label{font-size:11px;color:#666;margin-right:6px;}' +
                 '.eo-scope-select{flex:1 1 auto;height:24px;border:1px solid #cfcfcf;border-radius:2px;background:#fff;padding:0 4px;}';
@@ -285,7 +289,22 @@ define([
             if (pop)     { pop.set('eoScope', scope, { silent: true });     pop.set('userdata', ud, { silent: true }); }
             var asc = this.buildComment(src);
             if (asc) this.api.asc_changeComment(uid, asc);   // persist into userData (echoes via onApiChangeCommentData)
-            this.updateComments(true);
+            this.eoRefreshBadges(uid, scope);                // live-update badges (no re-render needed)
+        },
+        // Update every badge + card border for this comment (sidebar AND popover) in place,
+        // so the scope change is visible immediately without waiting for a re-render/reload.
+        eoRefreshBadges: function (uid, scope) {
+            var label = scope.charAt(0).toUpperCase() + scope.slice(1);
+            var safe = String(uid).replace(/["\\]/g, '');
+            var badges = document.querySelectorAll('.eo-scope-badge-btn[data-uid="' + safe + '"]');
+            for (var i = 0; i < badges.length; i++) {
+                var b = badges[i];
+                b.className = 'eo-scope-badge eo-scope-badge-' + scope + ' eo-scope-badge-btn';
+                b.setAttribute('data-scope', scope);
+                b.textContent = label;
+                var card = b.closest ? b.closest('.user-comment-item') : null;
+                if (card) card.className = card.className.replace(/\s*eo-scope-(shared|internal|external)\b/g, '') + ' eo-scope-' + scope;
+            }
         },
         //
 
@@ -735,6 +754,17 @@ define([
             var requestObj = {},
                 comment = this.readSDKComment(id, data, requestObj);
             if (comment) {
+                // top.legal: brand-new comment by me with no scope yet -> apply the scope the
+                // user chose in the add form (captured in _eoCurrentScope) and persist it,
+                // regardless of which add path created the comment.
+                if (comment.get('userid') == this.currentUserId
+                    && (data.asc_getUserData() || '').indexOf('eoScope') < 0
+                    && this._eoCurrentScope && this._eoCurrentScope !== 'shared') {
+                    comment.set('eoScope', this._eoCurrentScope, { silent: true });
+                    comment.set('userdata', this.eoEncodeScope(comment.get('userdata'), this._eoCurrentScope), { silent: true });
+                    var eoAsc = this.buildComment(comment);
+                    if (eoAsc) this.api.asc_changeComment(id, eoAsc);
+                }
                 if (comment.get('groupName')) {
                     this.addCommentToGroupCollection(comment);
                     (_.indexOf(this.collection.groups, comment.get('groupName'))>-1) && this.collection.push(comment);
