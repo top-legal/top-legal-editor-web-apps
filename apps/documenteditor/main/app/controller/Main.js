@@ -1316,19 +1316,27 @@ define([
                         if (api.__eoDLHooked) return true;
                         api.__eoDLHooked = true;
                         var FT = Asc.c_oAscFileType || {};
+                        // comment-carrying export formats -> the doc-server format string. The option's
+                        // fileType prop name is minified, so we match by VALUE (the FT code). PDF/images/
+                        // txt/html stay native (no comment leak there). All of these are delivered by the
+                        // backend as "redact the docx, then convert" -> only shared comments survive.
+                        var FMT = {};
+                        [['DOCX','docx'],['DOCM','docm'],['DOTX','dotx'],['ODT','odt'],['OTT','ott'],['FODT','fodt'],['RTF','rtf'],['DOC','doc']]
+                            .forEach(function(p){ var c = FT[p[0]]; if (c != null) FMT[c] = p[1]; });
                         var orig = api.asc_DownloadAs.bind(api);
                         api.asc_DownloadAs = function(opt){
                             try {
-                                var isDocx = false;
-                                if (opt) for (var k in opt) { if (opt[k] === FT.DOCX || opt[k] === FT.DOCM || opt[k] === FT.DOTX) { isDocx = true; break; } }
-                                if (isDocx) {
+                                var fmt = null;
+                                if (opt) for (var k in opt) { if (FMT.hasOwnProperty(opt[k])) { fmt = FMT[opt[k]]; break; } }
+                                if (fmt) {
                                     var name = (api.asc_getDocumentName && api.asc_getDocumentName()) || 'document.docx';
-                                    if (!/\.docx$/i.test(name)) name = name.replace(/\.[^.\/]+$/, '') + '.docx';
+                                    if (!/\.docx$/i.test(name)) name = name.replace(/\.[^.\/]+$/, '') + '.docx';   // stored copy is always docx
+                                    var outName = name.replace(/\.docx$/i, '') + '.' + fmt;
                                     try { api.asc_Save(false); } catch (e) {}   // flush current state to the platform copy
                                     setTimeout(function(){
-                                        fetch('/api/download/' + encodeURIComponent(name))
+                                        fetch('/api/download/' + encodeURIComponent(name) + '?format=' + fmt)
                                             .then(function(r){ if (!r.ok) throw new Error('download ' + r.status); return r.blob(); })
-                                            .then(function(b){ var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){ URL.revokeObjectURL(a.href); }, 15000); })
+                                            .then(function(b){ var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = outName; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){ URL.revokeObjectURL(a.href); }, 15000); })
                                             .catch(function(e){ try { console.error('[eo redact download]', e); } catch (_){} try { api.sendEvent('asc_onError', Asc.c_oAscError.ID.Unknown, Asc.c_oAscError.Level.NoCritical); } catch (_){} });
                                     }, 2000);
                                     return; // intercepted — fail-closed, no native fallback
