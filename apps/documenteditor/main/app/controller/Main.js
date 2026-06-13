@@ -199,6 +199,38 @@ define([
                 if (this.api){
                     this.api.SetDrawingFreeze(true);
 
+                    // top.legal: redact internal-scoped comments out of ANY native "Download as"
+                    // (docx family). The produced file is routed through the backend /api/redact so
+                    // the native button yields the same anchored/redacted docx as the app's download.
+                    // Fail-closed: on any redaction error we do NOT serve the raw (unredacted) file.
+                    (function(api){
+                        if (!api || api.__eoDownloadHooked) return;
+                        api.__eoDownloadHooked = true;
+                        var FT = Asc.c_oAscFileType || {};
+                        var REDACT = {};
+                        [FT.DOCX, FT.DOCM, FT.DOTX].forEach(function(t){ if (t != null) REDACT[t] = true; });
+                        var orig = api.processSavedFile.bind(api);
+                        api.processSavedFile = function(url, downloadType, filetype){
+                            if (!REDACT[filetype]) return orig(url, downloadType, filetype);
+                            var name = (api.asc_getDocumentName && api.asc_getDocumentName()) || api.documentTitle || 'document.docx';
+                            if (!/\.docx$/i.test(name)) name = name.replace(/\.[^.\/]+$/, '') + '.docx';
+                            fetch(url).then(function(r){ return r.blob(); }).then(function(blob){
+                                var fd = new FormData(); fd.append('file', blob, name);
+                                return fetch('/api/redact?name=' + encodeURIComponent(name), { method: 'POST', body: fd });
+                            }).then(function(r){ if (!r.ok) throw new Error('redact http ' + r.status); return r.blob(); })
+                            .then(function(red){
+                                var a = document.createElement('a');
+                                a.href = URL.createObjectURL(red); a.download = name;
+                                document.body.appendChild(a); a.click(); a.remove();
+                                setTimeout(function(){ URL.revokeObjectURL(a.href); }, 15000);
+                            }).catch(function(e){
+                                try { console.error('[eo redact download]', e); } catch (_){}
+                                try { api.sendEvent('asc_onError', Asc.c_oAscError.ID.Unknown, Asc.c_oAscError.Level.NoCritical); } catch (_){}
+                            });
+                            return; // intercepted — fail-closed, no raw fallback
+                        };
+                    })(this.api);
+
                     var value = Common.localStorage.getBool("de-settings-cachemode", true);
                     Common.Utils.InternalSettings.set("de-settings-cachemode", value);
                     this.api.asc_setDefaultBlitMode(!!value);
