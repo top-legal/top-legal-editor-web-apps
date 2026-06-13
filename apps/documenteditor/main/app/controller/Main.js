@@ -1301,38 +1301,47 @@ define([
                 me.hidePreloader();
                 me.onLongActionEnd(Asc.c_oAscAsyncActionType['BlockInteraction'], LoadingDocument);
 
-                // top.legal: redact internal-scoped comments out of ANY native "Download as"
-                // (docx family). The produced file is routed through the backend /api/redact so the
-                // native button yields the same anchored/redacted docx as the app's download.
-                // Runs here (document content ready) so the full sdkjs api — incl. processSavedFile —
-                // is loaded. Fail-closed: on any redaction error we do NOT serve the raw file.
-                (function(api){
-                    if (!api || api.__eoDownloadHooked || typeof api.processSavedFile !== 'function') return;
-                    api.__eoDownloadHooked = true;
-                    var FT = Asc.c_oAscFileType || {};
-                    var REDACT = {};
-                    [FT.DOCX, FT.DOCM, FT.DOTX].forEach(function(t){ if (t != null) REDACT[t] = true; });
-                    var orig = api.processSavedFile.bind(api);
-                    api.processSavedFile = function(url, downloadType, filetype){
-                        if (!REDACT[filetype]) return orig(url, downloadType, filetype);
-                        var name = (api.asc_getDocumentName && api.asc_getDocumentName()) || api.documentTitle || 'document.docx';
-                        if (!/\.docx$/i.test(name)) name = name.replace(/\.[^.\/]+$/, '') + '.docx';
-                        fetch(url).then(function(r){ return r.blob(); }).then(function(blob){
-                            var fd = new FormData(); fd.append('file', blob, name);
-                            return fetch('/api/redact?name=' + encodeURIComponent(name), { method: 'POST', body: fd });
-                        }).then(function(r){ if (!r.ok) throw new Error('redact http ' + r.status); return r.blob(); })
-                        .then(function(red){
-                            var a = document.createElement('a');
-                            a.href = URL.createObjectURL(red); a.download = name;
-                            document.body.appendChild(a); a.click(); a.remove();
-                            setTimeout(function(){ URL.revokeObjectURL(a.href); }, 15000);
-                        }).catch(function(e){
-                            try { console.error('[eo redact download]', e); } catch (_){}
-                            try { api.sendEvent('asc_onError', Asc.c_oAscError.ID.Unknown, Asc.c_oAscError.Level.NoCritical); } catch (_){}
-                        });
-                        return; // intercepted — fail-closed, no raw fallback
-                    };
-                })(me.api);
+                // top.legal: redact internal-scoped comments out of the native "Download as DOCX".
+                // The editor's docx download path is built in-browser via minified internals we can't
+                // wrap by name, so we take over at the PUBLIC asc_DownloadAs: detect docx by matching an
+                // option value against c_oAscFileType.DOCX (the option's property name is minified), then
+                // force-save and pull the redacted+anchored docx from the backend (same /api/download the
+                // app button uses). PDF/other → native (PDF already renders without comments).
+                // Self-installs with a retry poll on window.Asc.editor (lifecycle timing is unreliable).
+                // Fail-closed: on any error we surface asc_onError and do NOT fall back to a raw download.
+                (function(){
+                    function eoInstallDownloadRedactor(){
+                        var api = window.Asc && Asc.editor;
+                        if (!api || typeof api.asc_DownloadAs !== 'function') return false;
+                        if (api.__eoDLHooked) return true;
+                        api.__eoDLHooked = true;
+                        var FT = Asc.c_oAscFileType || {};
+                        var orig = api.asc_DownloadAs.bind(api);
+                        api.asc_DownloadAs = function(opt){
+                            try {
+                                var isDocx = false;
+                                if (opt) for (var k in opt) { if (opt[k] === FT.DOCX || opt[k] === FT.DOCM || opt[k] === FT.DOTX) { isDocx = true; break; } }
+                                if (isDocx) {
+                                    var name = (api.asc_getDocumentName && api.asc_getDocumentName()) || 'document.docx';
+                                    if (!/\.docx$/i.test(name)) name = name.replace(/\.[^.\/]+$/, '') + '.docx';
+                                    try { api.asc_Save(false); } catch (e) {}   // flush current state to the platform copy
+                                    setTimeout(function(){
+                                        fetch('/api/download/' + encodeURIComponent(name))
+                                            .then(function(r){ if (!r.ok) throw new Error('download ' + r.status); return r.blob(); })
+                                            .then(function(b){ var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){ URL.revokeObjectURL(a.href); }, 15000); })
+                                            .catch(function(e){ try { console.error('[eo redact download]', e); } catch (_){} try { api.sendEvent('asc_onError', Asc.c_oAscError.ID.Unknown, Asc.c_oAscError.Level.NoCritical); } catch (_){} });
+                                    }, 2000);
+                                    return; // intercepted — fail-closed, no native fallback
+                                }
+                            } catch (e) { try { console.error('[eo dl hook]', e); } catch (_){} }
+                            return orig(opt);
+                        };
+                        return true;
+                    }
+                    if (!eoInstallDownloadRedactor()) {
+                        var n = 0, iv = setInterval(function(){ if (eoInstallDownloadRedactor() || ++n > 80) clearInterval(iv); }, 250);
+                    }
+                })();
 
                 if (!me.appOptions.canCopy)
                     Common.UI.TooltipManager.showTip({ step: 'copyDisabled', text: me.errorCopyDisabled, target: '#toolbar', maxwidth: 350, automove: true, noHighlight: true, noArrow: true, showButton: false});
