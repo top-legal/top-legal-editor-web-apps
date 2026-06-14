@@ -234,6 +234,16 @@ define([
             o.eoScope = scope;
             return JSON.stringify(o);
         },
+        // top.legal: mirror the scope into the comment author's USERNAME group
+        // ("<scope> <displayName>") so OnlyOffice's native commentGroups filtering shows each
+        // team only its own scope + shared. getParsedName strips it back for display. Keeps the
+        // (separate) userData eoScope as the source of truth for coloring + export redaction.
+        eoGroupUserName: function (scope, name) {
+            var P = AscCommon.UserInfoParser;
+            var sep = (P.getSeparator && P.getSeparator()) || String.fromCharCode(160);
+            var disp = P.getParsedName((name != null ? name : (P.getCurrentName ? P.getCurrentName() : '')) || '');
+            return (scope || 'shared') + sep + disp;
+        },
         eoInjectCss: function () {
             if (document.getElementById('eo-comments-css')) return;
             var css =
@@ -284,9 +294,11 @@ define([
             var src = comment || pop;
             if (!src) return;
             var ud = this.eoEncodeScope(src.get('userdata'), scope);
+            // mirror scope into username group too, so per-team visibility updates with the scope.
+            var newName = this.eoGroupUserName(scope, src.get('username'));
             // keep sidebar + popover models in sync
-            if (comment) { comment.set('eoScope', scope, { silent: true }); comment.set('userdata', ud, { silent: true }); }
-            if (pop)     { pop.set('eoScope', scope, { silent: true });     pop.set('userdata', ud, { silent: true }); }
+            if (comment) { comment.set('eoScope', scope, { silent: true }); comment.set('userdata', ud, { silent: true }); comment.set('username', newName, { silent: true }); }
+            if (pop)     { pop.set('eoScope', scope, { silent: true });     pop.set('userdata', ud, { silent: true });     pop.set('username', newName, { silent: true }); }
             var asc = this.buildComment(src);
             if (asc) this.api.asc_changeComment(uid, asc);   // persist into userData (echoes via onApiChangeCommentData)
             this.eoRefreshBadges(uid, scope);                // live-update badges (no re-render needed)
@@ -367,9 +379,12 @@ define([
                         comment.asc_putDocumentFlag(documentFlag);
                     }
 
-                    // top.legal: scope from the panel select (stable DOM) → userData (round-trips).
+                    // top.legal: scope from the panel select (stable DOM) → userData (round-trips)
+                    // + the comment's username group (drives per-team commentGroups visibility).
                     var eoPan = document.getElementById('comment-scope-new');
-                    comment.asc_putUserData(this.eoEncodeScope(comment.asc_getUserData(), (eoPan && eoPan.value) || this._eoCurrentScope || 'shared'));
+                    var eoScope = (eoPan && eoPan.value) || this._eoCurrentScope || 'shared';
+                    comment.asc_putUserData(this.eoEncodeScope(comment.asc_getUserData(), eoScope));
+                    comment.asc_putUserName(this.eoGroupUserName(eoScope));
 
                     this.api.asc_addComment(comment);
                     this.view.showEditContainer(false);
@@ -1597,8 +1612,10 @@ define([
                     if (!_.isUndefined(comment.asc_putDocumentFlag))
                         comment.asc_putDocumentFlag(false);
 
-                    // top.legal: store the chosen scope in the comment's userData (round-trips through save/reload).
-                    comment.asc_putUserData(this.eoEncodeScope(comment.asc_getUserData(), this._eoCurrentScope || 'shared'));
+                    // top.legal: chosen scope -> userData (round-trips) + username group (per-team visibility).
+                    var eoScope = this._eoCurrentScope || 'shared';
+                    comment.asc_putUserData(this.eoEncodeScope(comment.asc_getUserData(), eoScope));
+                    comment.asc_putUserName(this.eoGroupUserName(eoScope));
 
                     this.api.asc_addComment(comment);
                     this.view.showEditContainer(false);
