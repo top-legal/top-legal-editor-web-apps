@@ -1305,8 +1305,9 @@ define([
                 // The editor's docx download path is built in-browser via minified internals we can't
                 // wrap by name, so we take over at the PUBLIC asc_DownloadAs: detect docx by matching an
                 // option value against c_oAscFileType.DOCX (the option's property name is minified), then
-                // force-save and pull the redacted+anchored docx from the backend (same /api/download the
-                // app button uses). PDF/other → native (PDF already renders without comments).
+                // force-save and pull the redacted+anchored docx from tl-office
+                // (/tl-office/editor-download, authorized by the eoDl token in the signed config).
+                // PDF/other → native (PDF already renders without comments).
                 // Self-installs with a retry poll on window.Asc.editor (lifecycle timing is unreliable).
                 // Fail-closed: on any error we surface asc_onError and do NOT fall back to a raw download.
                 (function(){
@@ -1332,9 +1333,14 @@ define([
                                     var name = (api.asc_getDocumentName && api.asc_getDocumentName()) || 'document.docx';
                                     if (!/\.docx$/i.test(name)) name = name.replace(/\.[^.\/]+$/, '') + '.docx';   // stored copy is always docx
                                     var outName = name.replace(/\.docx$/i, '') + '.' + fmt;
+                                    // Platform (tl-office): the redacted docx is served by /tl-office/editor-download,
+                                    // authorized by the download token tl-office signed into this.document.eoDl
+                                    // (the iframe has no Cognito token). Old standalone path was /api/download/<name>.
+                                    var eoDl = (me.document && me.document.eoDl) || '';
+                                    if (!eoDl) { try { console.error('[eo redact download] no eoDl token in config'); } catch (_){} try { api.sendEvent('asc_onError', Asc.c_oAscError.ID.Unknown, Asc.c_oAscError.Level.NoCritical); } catch (_){} return; }
                                     try { api.asc_Save(false); } catch (e) {}   // flush current state to the platform copy
                                     setTimeout(function(){
-                                        fetch('/api/download/' + encodeURIComponent(name) + '?format=' + fmt)
+                                        fetch('/tl-office/editor-download?format=' + fmt + '&token=' + encodeURIComponent(eoDl))
                                             .then(function(r){ if (!r.ok) throw new Error('download ' + r.status); return r.blob(); })
                                             .then(function(b){ var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = outName; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){ URL.revokeObjectURL(a.href); }, 15000); })
                                             .catch(function(e){ try { console.error('[eo redact download]', e); } catch (_){} try { api.sendEvent('asc_onError', Asc.c_oAscError.ID.Unknown, Asc.c_oAscError.Level.NoCritical); } catch (_){} });
