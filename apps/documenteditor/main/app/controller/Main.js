@@ -1860,7 +1860,10 @@ define([
                 this.appOptions.canFavorite = this.document.info && (this.document.info.favorite!==undefined && this.document.info.favorite!==null) && !this.appOptions.isOffline;
                 this.appOptions.canFavorite && appHeader.setFavorite(this.document.info.favorite);
 
-                this.appOptions.canUseReviewPermissions = this.appOptions.canLicense && (!!this.permissions.reviewGroups ||
+                // top.legal: drop the CE license gate so per-team reviewGroups apply — same reason as
+                // commentGroups below. canLicense is false in CE, so review permissions were never applied
+                // and either party could accept/reject the other party's redlines.
+                this.appOptions.canUseReviewPermissions = (!!this.permissions.reviewGroups ||
                                                         this.editorConfig.customization && this.editorConfig.customization.reviewPermissions && (typeof (this.editorConfig.customization.reviewPermissions) == 'object'));
                 this.appOptions.canUseCommentPermissions = !!this.permissions.commentGroups; // top.legal: drop CE license gate so per-team commentGroups apply
                 this.appOptions.canUseUserInfoPermissions = this.appOptions.canLicense && !!this.permissions.userInfoGroups;
