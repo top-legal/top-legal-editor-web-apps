@@ -1,0 +1,57 @@
+# Installed by appsync-backend/tl-office/documentserver/install-mirror-workflows.sh
+# Keeps the CodeCommit mirror tl-office-web-apps in sync so the tl-documentserver-build
+# CodeBuild project (which has no GitHub credentials) sees pushes to this repo.
+
+name: Mirror to CodeCommit
+
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  workflow_dispatch: {}
+
+concurrency:
+  group: mirror-to-codecommit
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-central-1
+  CODECOMMIT_REPO: tl-office-web-apps
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          # OIDC role trusting repo:top-legal/<this repo>:* with codecommit:GitPush
+          # on the mirror. ARN stored as a repo secret.
+          role-to-assume: ${{ secrets.AWS_MIRROR_ROLE_ARN }}
+
+      - name: Install git-remote-codecommit
+        run: pipx install git-remote-codecommit
+
+      - name: Mirror-clone this repo from GitHub
+        run: |
+          git clone --mirror \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            repo.git
+
+      - name: Push heads + tags to CodeCommit
+        working-directory: repo.git
+        run: |
+          CC="codecommit::${AWS_REGION}://${CODECOMMIT_REPO}"
+          # Explicit refspecs rather than --mirror: a fork's --mirror clone also
+          # carries refs/pull/*, and pushing those into CodeCommit is noise.
+          git push --prune "$CC" "+refs/heads/*:refs/heads/*"
+          # Tags are pushed WITHOUT --prune on purpose: the mirror carries
+          # `ds-pinned/*` tags that exist only in CodeCommit (mirror-office-repos.sh
+          # creates them at the DocumentServer-pinned upstream commit). Pruning tags
+          # here would delete them and the next build would fail at
+          # `git submodule update` with "reference is not a tree".
+          git push "$CC" "+refs/tags/*:refs/tags/*"
