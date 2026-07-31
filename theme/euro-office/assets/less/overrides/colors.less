@@ -1,0 +1,33 @@
+// --------------------------------------------------------------------------
+// Header bar colour — top.legal brand
+// Upstream: apps/common/main/resources/less/colors-table.less:14 (:root default)
+//           apps/common/main/resources/less/colors-table-classic.less:4 (.theme-classic-light)
+//           apps/common/main/resources/less/colors-table-white.less:5   (.theme-white)
+//           apps/common/main/resources/less/colors-table-gray.less:5    (.theme-gray)
+//
+// The document editor's header ships as #446995 — ONLYOFFICE's Word blue, which reads as
+// Microsoft chrome inside a top.legal dealroom. Repaint it with the brand's secondary
+// (#3DBD7D, `secondaryMain` in the frontend's MUI palette).
+//
+// Why the CSS custom property and not @header-background-color: the LESS variable is just
+// `var(--toolbar-header-document)` (variables.less), and every consumer — the header bar,
+// its buttons, the tab underline borders (asc-mixins.less:839) — resolves that one property.
+// Overriding it here therefore repaints the whole bar consistently, and this theme is
+// imported AFTER the colour tables so the later definition wins.
+//
+// Dark themes keep their near-black headers: green chrome only makes sense on a light UI.
+// --------------------------------------------------------------------------
+
+// The signed editor config sends uiTheme: 'theme-light', for which NO colour table exists —
+// it falls through to the :root defaults, so that is the case that actually ships. The three
+// class-scoped copies cover a user switching theme by hand in the editor's own settings;
+// they are needed because those selectors (`:root .theme-white`) outrank a bare `:root`.
+:root {
+    --toolbar-header-document: @tl-header-document;
+
+    .theme-white,
+    .theme-classic-light,
+    .theme-gray {
+        --toolbar-header-document: @tl-header-document;
+    }
+}

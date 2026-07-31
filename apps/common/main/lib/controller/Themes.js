@@ -40,6 +40,12 @@ define([
         const THEME_TYPE_LIGHT = 'light';
         const THEME_TYPE_DARK = 'dark';
         const THEME_TYPE_SYSTEM = 'system';
+        // top.legal: the loading skeleton paints its header bar from
+        // --sk-background-toolbar-header-word, which upstream sets to ONLYOFFICE's Word blue
+        // (#446995) in both light themes. The real header is repainted to the brand's
+        // secondary green by theme/euro-office/.../overrides/colors.less, so leaving these
+        // blue would flash a blue bar that turns green the moment the app boots. Only the
+        // -word (document editor) variant changes; the other editors keep upstream colours.
         var themes_map = {
             'theme-system': {
                 text: locale.txtThemeSystem || 'Same as system',
@@ -54,7 +60,7 @@ define([
                     css: `.loadmask {--sk-height-toolbar-controls: 66px; --sk-layout-padding-toolbar: 0;
                                     --sk-shadow-toolbar: inset 0 -1px #cbcbcb; --sk-border-radius-toolbar: 0;
                                     --sk-background-toolbar: #f7f7f7; --sk-background-toolbar-controls: #f7f7f7;
-                                    --sk-background-toolbar-header-word: #446995; --sk-background-toolbar-header-pdf: #aa5252;
+                                    --sk-background-toolbar-header-word: #3DBD7D; --sk-background-toolbar-header-pdf: #aa5252;
                                     --sk-background-toolbar-header-slide: #BE664F; --sk-background-toolbar-header-cell: #40865c; 
                                     --sk-background-toolbar-header-visio: #444796; 
                                     --sk-background-toolbar-tab: rgba(0,0,0,.15); --sk-background-toolbar-button: #d8dadc;
@@ -74,7 +80,7 @@ define([
                 skeleton: {
                     css: `.loadmask {--sk-height-toolbar-controls: 66px; --sk-layout-padding-toolbar: 0;
                                     --sk-shadow-toolbar: inset 0 -1px #cbcbcb; --sk-border-radius-toolbar: 0;
-                                    --sk-background-toolbar-header-word: #446995; --sk-background-toolbar-header-pdf: #aa5252;
+                                    --sk-background-toolbar-header-word: #3DBD7D; --sk-background-toolbar-header-pdf: #aa5252;
                                     --sk-background-toolbar-header-slide: #BE664F;; --sk-background-toolbar-header-cell: #40865c;
                                     --sk-background-toolbar-header-visio: #444796; 
                                     --sk-background-toolbar: #f7f7f7; --sk-background-toolbar-controls: #f1f1f1;

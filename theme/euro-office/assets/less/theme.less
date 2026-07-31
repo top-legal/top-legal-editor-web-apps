@@ -30,6 +30,12 @@
 // Override brand colors
 @brand-primary: @nc-primary;
 
+// top.legal brand — secondary (`secondaryMain` in the frontend's MUI palette,
+// packages/app/src/providers/theme/themes.ts). Used by overrides/colors.less to repaint the
+// document editor's header bar, which upstream ships as ONLYOFFICE's Word blue (#446995).
+@tl-secondary: #3DBD7D;
+@tl-header-document: @tl-secondary;
+
 // ==========================================================================
 // Load CSS Overrides
 // ==========================================================================

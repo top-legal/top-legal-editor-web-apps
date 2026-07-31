@@ -15,24 +15,17 @@
   }
 }
 
-// Document editor — top.legal: show the top.legal wordmark (86×20) instead of the doc icon
+// Document editor — top.legal: NO logo in the header.
+// This slot used to carry the top.legal wordmark (86×20 header-logo_s.svg); the editor is
+// embedded inside the top.legal dealroom, which already brands the surrounding page, so a
+// second wordmark in the editor chrome is noise. Hide the slot outright rather than point it
+// at a blank asset: a blank asset still reserves the 86px box and its 12/24px padding.
+// The SVGs stay in the tree — the About dialog and the mobile apps still reference them.
+// Theme-scoped rules are unnecessary here: `display: none` on the container beats every
+// per-theme background-image rule, since those all target the inner `i`.
 body[data-editor-type="document"] {
-  .extra #header-logo i,
-  .extra #header-logo.logo-light i {
-    width: 86px;
-    background-image: ~"url('@{common-image-const-path}/header/header-logo_s.svg')";
-  }
-
-  &.theme-light,
-  &.theme-classic-light,
-  &.theme-dark,
-  &.theme-contrast-dark,
-  &.theme-night {
-    .extra #header-logo i,
-    .extra #header-logo.logo-light i {
-      width: 86px;
-      background-image: ~"url('@{common-image-const-path}/header/header-logo_s.svg')";
-    }
+  .extra #header-logo {
+    display: none;
   }
 }
 
