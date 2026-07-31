@@ -3986,6 +3986,29 @@ define([
                     }
                 }
 
+                // top.legal — native "Negotiation" ribbon tab.
+                //
+                // NOT inside `if (config.isEdit)`, unlike Style above: in turn-based negotiation
+                // the party without the turn gets a read-only frozen snapshot, and they are
+                // precisely who needs to see whose turn it is and what happens next. For the same
+                // reason the tab carries no 'canedit' extcls.
+                //
+                // Inserted at index 1 AFTER Style was inserted there, so the order ends up
+                // Home | Negotiation | Style — negotiation is the primary workflow.
+                //
+                // The tab renders nothing until the dealroom sends it a descriptor, so on any
+                // other host (or an older app) it is simply an empty tab rather than a broken one.
+                var negotiationtab = application.getController('NegotiationTab');
+                if ( negotiationtab ) {
+                    negotiationtab.setApi(me.api).setConfig({toolbar: me, mode: config});
+                    $panel = negotiationtab.createToolbarPanel();
+                    if ($panel) {
+                        tab = {action: 'negotiation', caption: 'Negotiation', layoutname: 'toolbar-negotiation', dataHintTitle: 'N'};
+                        me.toolbar.addTab(tab, $panel, 1);
+                        me.toolbar.setVisible('negotiation', true);
+                    }
+                }
+
                 if ( config.canProtect) {
                     tab = {action: 'protect', caption: me.toolbar.textTabProtect, layoutname: 'toolbar-protect', dataHintTitle: 'T'};
                     $panel = application.getController('Common.Controllers.Protection').createToolbarPanel();
