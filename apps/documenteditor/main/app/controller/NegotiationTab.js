@@ -141,11 +141,17 @@ define([
                 '.eo-neg-controls{display:flex;align-items:stretch;overflow-x:auto;overflow-y:hidden;max-width:100%;height:100%;box-sizing:border-box;}' +
                 '.eo-neg-seg-group{display:flex;align-items:stretch;}' +
                 // Matches the sprite glyphs upstream draws in .inner-box-icon on an x-huge button.
-                '.eo-neg-ico{width:28px;height:28px;display:block;margin:0 auto;}' +
+                // 20px inside upstream's 28px .inner-box-icon box, exactly like the sprite glyphs
+                // (buttons.less: div.inner-box-icon{height:28px} with a 20px icon). At 28px the
+                // glyph filled the whole box and pushed the caption out of the panel, which is
+                // why the labels were clipped.
+                '.eo-neg-ico{width:20px;height:20px;display:block;margin:0 auto;}' +
                 // The chip is a status readout, not a control, so it is centred against the tall
                 // button row rather than stretched to it.
-                '.eo-neg-chip{align-self:center;flex:0 0 auto;display:inline-flex;align-items:center;' +
-                    'font-size:11px;font-weight:bold;border-radius:999px;padding:3px 10px;margin:0 8px;white-space:nowrap;}' +
+                // margin-left:auto pushes the status to the far right of the ribbon row; the app also
+                // emits it last so nothing sits between it and the edge.
+                '.eo-neg-chip{align-self:center;margin-left:auto;flex:0 0 auto;display:inline-flex;align-items:center;' +
+                    'font-size:11px;font-weight:bold;border-radius:999px;padding:3px 12px;margin-right:12px;white-space:nowrap;}' +
                 '.eo-neg-chip.green{background:#3DBD7D;color:#fff;}' +
                 '.eo-neg-chip.grey{background:#eceff1;color:#4a5568;}' +
                 '.eo-neg-chip.amber{background:#ffaa00;color:#fff;}' +
@@ -189,7 +195,9 @@ define([
         // user-authored (workflow names), so they must never be parsed as markup.
         _chip: function (c) {
             var tone = (c.tone === 'green' || c.tone === 'amber') ? c.tone : 'grey';
-            return $('<span class="eo-neg-chip ' + tone + '"></span>').text(c.label || '');
+            var $chip = $('<span class="eo-neg-chip ' + tone + '"></span>').text(c.label || '');
+            if (c.hint) $chip.attr('title', c.hint);
+            return $chip;
         },
 
         /**
@@ -211,6 +219,10 @@ define([
             if (ico) $icon.append(ico);
             $btn.append($icon);
             $btn.append($('<div class="inner-box-caption"></div>').append($('<span class="caption"></span>').text(opts.label || '')));
+            // Native browser tooltip. Upstream's own buttons use data-hint + Common.UI.Tooltip,
+            // but that needs a component instance per button; title costs nothing, needs no
+            // wiring, and the text is host-supplied so it is already translated.
+            if (opts.hint) $btn.attr('title', opts.hint);
             if (opts.active) $btn.addClass('active');
             if (opts.disabled) $btn.addClass('disabled').prop('disabled', true);
             $btn.on('click', function () {
@@ -226,6 +238,7 @@ define([
             return me._ribbonButton({
                 label: c.label,
                 icon: c.icon,
+                hint: c.hint,
                 disabled: !!(c.disabled || c.busy),
                 onClick: function () { me._post({ type: 'action', id: c.id }); },
             });
@@ -271,6 +284,7 @@ define([
                 $wrap.append(me._ribbonButton({
                     label: o.label,
                     icon: o.icon,
+                    hint: o.hint,
                     active: o.value === c.value,
                     disabled: !!(c.disabled || o.disabled),
                     onClick: function () {
