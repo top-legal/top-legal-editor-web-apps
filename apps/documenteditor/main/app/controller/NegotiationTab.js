@@ -137,15 +137,18 @@ define([
             // place, so this sheet now only covers what upstream has no rule for: our SVG glyph,
             // the status chip, and group layout.
             var css =
-                '.eo-neg-group{display:flex;align-items:stretch;height:100%;overflow:hidden;}' +
-                '.eo-neg-controls{display:flex;align-items:stretch;overflow-x:auto;overflow-y:hidden;max-width:100%;height:100%;box-sizing:border-box;}' +
+                // flex:1 on BOTH is what makes margin-left:auto work on the status chip. Without it
+                // these shrink-wrap their content, there is no free space in the row, and the chip
+                // just sits next to the last button instead of at the edge.
+                '.eo-neg-group{display:flex;align-items:stretch;height:100%;flex:1 1 auto;overflow:hidden;}' +
+                '.eo-neg-controls{display:flex;align-items:stretch;overflow-x:auto;overflow-y:hidden;width:100%;flex:1 1 auto;height:100%;box-sizing:border-box;}' +
                 '.eo-neg-seg-group{display:flex;align-items:stretch;}' +
                 // Matches the sprite glyphs upstream draws in .inner-box-icon on an x-huge button.
                 // 20px inside upstream's 28px .inner-box-icon box, exactly like the sprite glyphs
                 // (buttons.less: div.inner-box-icon{height:28px} with a 20px icon). At 28px the
                 // glyph filled the whole box and pushed the caption out of the panel, which is
                 // why the labels were clipped.
-                '.eo-neg-ico{width:20px;height:20px;display:block;margin:0 auto;}' +
+                '.eo-neg-ico{width:var(--eo-neg-icon-size,20px);height:var(--eo-neg-icon-size,20px);display:block;margin:0 auto;}' +
                 // The chip is a status readout, not a control, so it is centred against the tall
                 // button row rather than stretched to it.
                 // margin-left:auto pushes the status to the far right of the ribbon row; the app also
@@ -174,6 +177,8 @@ define([
             if (!me.$controls) return;
             me.$controls.empty();
 
+            me._applyStyle();
+
             var controls = (me.descriptor && me.descriptor.controls) || [];
             if (!controls.length) {
                 me.$controls.append($('<span class="eo-neg-empty"></span>').text('—'));
@@ -189,6 +194,40 @@ define([
                 else if (c.type === 'select')    $el = me._select(c);
                 if ($el) me.$controls.append($el);
             });
+        },
+
+        /**
+         * Styling supplied by the HOST, so visual tweaks stop costing an image rebuild.
+         *
+         * Every size/spacing change so far has meant a ~25 min CodeBuild plus a container swap that
+         * interrupts all three stages. Reading them from the descriptor instead makes them ordinary
+         * frontend changes: instant locally, a pm2 reload to beta, and independent per stage.
+         *
+         * Two channels. `style` is a map of tokens applied as CSS custom properties on our own
+         * container — the safe, expected path, and the base sheet already reads them. `css` is an
+         * escape hatch for the unforeseen; it is injected into a single <style> element we own and
+         * rewrite, never appended to, so repeated renders cannot pile up sheets. Selectors there
+         * should stay scoped to .eo-neg-controls: nothing stops a stray rule reaching the rest of
+         * the editor, and that would be a nasty thing to debug from a screenshot.
+         */
+        _applyStyle: function () {
+            var d = this.descriptor || {};
+            if (this.$controls && d.style && typeof d.style === 'object') {
+                var el = this.$controls[0];
+                Object.keys(d.style).forEach(function (k) {
+                    // Token names are constrained so a descriptor cannot set arbitrary inline CSS.
+                    if (!/^[a-z0-9-]+$/i.test(k)) return;
+                    el.style.setProperty('--eo-neg-' + k, String(d.style[k]));
+                });
+            }
+            var host = document.getElementById('eo-neg-host-css');
+            if (!host) {
+                host = document.createElement('style');
+                host.id = 'eo-neg-host-css';
+                host.type = 'text/css';
+                document.getElementsByTagName('head')[0].appendChild(host);
+            }
+            host.innerHTML = (typeof d.css === 'string') ? d.css : '';
         },
 
         // textContent everywhere, never .html(): labels are host-supplied strings and some are
