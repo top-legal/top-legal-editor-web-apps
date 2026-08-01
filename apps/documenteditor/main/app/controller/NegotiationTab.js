@@ -132,19 +132,25 @@ define([
         _injectStyles: function () {
             if (document.getElementById('eo-neg-tab-css')) return;
             var css =
+                // align-items:center on a full-height row is what keeps every control on one
+                // optical baseline; the first cut let each widget size itself and they sat ragged.
                 '.eo-neg-group{display:flex;align-items:center;height:100%;overflow:hidden;}' +
                 '.eo-neg-controls{display:flex;align-items:center;gap:10px;overflow-x:auto;overflow-y:hidden;max-width:100%;padding:3px 8px;height:100%;box-sizing:border-box;}' +
-                '.eo-neg-chip{flex:0 0 auto;font-size:11px;font-weight:bold;border-radius:999px;padding:3px 10px;white-space:nowrap;}' +
+                // One shared control height, so buttons, segmented groups and selects line up
+                // regardless of whether they contain an icon, a label, or both.
+                '.eo-neg-controls > *{height:28px;}' +
+                '.eo-neg-ico{width:15px;height:15px;flex:0 0 auto;display:block;}' +
+                '.eo-neg-chip{flex:0 0 auto;display:inline-flex;align-items:center;font-size:11px;font-weight:bold;border-radius:999px;padding:0 10px;white-space:nowrap;}' +
                 '.eo-neg-chip.green{background:#3DBD7D;color:#fff;}' +
                 '.eo-neg-chip.grey{background:#eceff1;color:#4a5568;}' +
                 '.eo-neg-chip.amber{background:#ffaa00;color:#fff;}' +
-                '.eo-neg-btn{flex:0 0 auto;border:1px solid #cfcfcf;background:#fff;border-radius:3px;padding:5px 12px;font-size:11px;font-weight:bold;color:#363636;cursor:pointer;white-space:nowrap;}' +
+                '.eo-neg-btn{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;border:1px solid #cfcfcf;background:#fff;border-radius:3px;padding:0 12px;font-size:11px;font-weight:bold;color:#363636;cursor:pointer;white-space:nowrap;}' +
                 '.eo-neg-btn:hover:not(:disabled){border-color:#3DBD7D;}' +
                 '.eo-neg-btn.primary{background:#12243C;border-color:#12243C;color:#fff;}' +
                 '.eo-neg-btn.primary:hover:not(:disabled){background:#1b3557;}' +
                 '.eo-neg-btn:disabled{opacity:.5;cursor:default;}' +
-                '.eo-neg-seg{flex:0 0 auto;display:inline-flex;border:1px solid #cfcfcf;border-radius:3px;overflow:hidden;}' +
-                '.eo-neg-seg button{border:none;background:#fff;padding:5px 12px;font-size:11px;font-weight:bold;color:#363636;cursor:pointer;white-space:nowrap;}' +
+                '.eo-neg-seg{flex:0 0 auto;display:inline-flex;align-items:stretch;border:1px solid #cfcfcf;border-radius:3px;overflow:hidden;}' +
+                '.eo-neg-seg button{display:inline-flex;align-items:center;gap:6px;border:none;background:#fff;padding:0 12px;font-size:11px;font-weight:bold;color:#363636;cursor:pointer;white-space:nowrap;}' +
                 '.eo-neg-seg button + button{border-left:1px solid #cfcfcf;}' +
                 '.eo-neg-seg button[aria-pressed="true"]{background:#3DBD7D;color:#fff;}' +
                 '.eo-neg-seg button:disabled{opacity:.5;cursor:default;}' +
@@ -203,11 +209,32 @@ define([
             return $b;
         },
 
+        // Icons arrive as raw SVG path geometry on a 24x24 viewBox, never as names: this file
+        // cannot import the app's icon set, and shipping names would mean the image carries a
+        // fixed catalogue that only a rebuild could extend. currentColor makes the glyph follow
+        // the button's own text colour, including the selected state.
+        _icon: function (pathData) {
+            if (!pathData || typeof pathData !== 'string') return null;
+            var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('viewBox', '0 0 24 24');
+            svg.setAttribute('class', 'eo-neg-ico');
+            svg.setAttribute('aria-hidden', 'true');
+            var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            // setAttribute, not innerHTML — this is host-supplied and must never be parsed as markup.
+            path.setAttribute('d', pathData);
+            path.setAttribute('fill', 'currentColor');
+            svg.appendChild(path);
+            return svg;
+        },
+
         _segmented: function (c) {
             var me = this;
             var $wrap = $('<div class="eo-neg-seg"></div>');
             (c.options || []).forEach(function (o) {
-                var $b = $('<button type="button"></button>').text(o.label || '');
+                var $b = $('<button type="button"></button>');
+                var ico = me._icon(o.icon);
+                if (ico) $b.append(ico);
+                $b.append($('<span></span>').text(o.label || ''));
                 $b.attr('aria-pressed', String(o.value === c.value));
                 if (c.disabled || o.disabled) $b.prop('disabled', true);
                 $b.on('click', function () {
