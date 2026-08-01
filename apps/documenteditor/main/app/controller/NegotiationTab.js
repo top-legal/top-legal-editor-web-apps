@@ -131,32 +131,27 @@ define([
 
         _injectStyles: function () {
             if (document.getElementById('eo-neg-tab-css')) return;
+            // Intentionally small. The buttons themselves are upstream's `btn-toolbar x-huge`, so
+            // their sizing, hover, active and disabled states — and every UI theme — come from
+            // buttons.less. Restyling them here is what made the tab look foreign in the first
+            // place, so this sheet now only covers what upstream has no rule for: our SVG glyph,
+            // the status chip, and group layout.
             var css =
-                // align-items:center on a full-height row is what keeps every control on one
-                // optical baseline; the first cut let each widget size itself and they sat ragged.
-                '.eo-neg-group{display:flex;align-items:center;height:100%;overflow:hidden;}' +
-                '.eo-neg-controls{display:flex;align-items:center;gap:10px;overflow-x:auto;overflow-y:hidden;max-width:100%;padding:3px 8px;height:100%;box-sizing:border-box;}' +
-                // One shared control height, so buttons, segmented groups and selects line up
-                // regardless of whether they contain an icon, a label, or both.
-                '.eo-neg-controls > *{height:28px;}' +
-                '.eo-neg-ico{width:15px;height:15px;flex:0 0 auto;display:block;}' +
-                '.eo-neg-chip{flex:0 0 auto;display:inline-flex;align-items:center;font-size:11px;font-weight:bold;border-radius:999px;padding:0 10px;white-space:nowrap;}' +
+                '.eo-neg-group{display:flex;align-items:stretch;height:100%;overflow:hidden;}' +
+                '.eo-neg-controls{display:flex;align-items:stretch;overflow-x:auto;overflow-y:hidden;max-width:100%;height:100%;box-sizing:border-box;}' +
+                '.eo-neg-seg-group{display:flex;align-items:stretch;}' +
+                // Matches the sprite glyphs upstream draws in .inner-box-icon on an x-huge button.
+                '.eo-neg-ico{width:20px;height:20px;display:block;margin:0 auto;}' +
+                // The chip is a status readout, not a control, so it is centred against the tall
+                // button row rather than stretched to it.
+                '.eo-neg-chip{align-self:center;flex:0 0 auto;display:inline-flex;align-items:center;' +
+                    'font-size:11px;font-weight:bold;border-radius:999px;padding:3px 10px;margin:0 8px;white-space:nowrap;}' +
                 '.eo-neg-chip.green{background:#3DBD7D;color:#fff;}' +
                 '.eo-neg-chip.grey{background:#eceff1;color:#4a5568;}' +
                 '.eo-neg-chip.amber{background:#ffaa00;color:#fff;}' +
-                '.eo-neg-btn{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;border:1px solid #cfcfcf;background:#fff;border-radius:3px;padding:0 12px;font-size:11px;font-weight:bold;color:#363636;cursor:pointer;white-space:nowrap;}' +
-                '.eo-neg-btn:hover:not(:disabled){border-color:#3DBD7D;}' +
-                '.eo-neg-btn.primary{background:#12243C;border-color:#12243C;color:#fff;}' +
-                '.eo-neg-btn.primary:hover:not(:disabled){background:#1b3557;}' +
-                '.eo-neg-btn:disabled{opacity:.5;cursor:default;}' +
-                '.eo-neg-seg{flex:0 0 auto;display:inline-flex;align-items:stretch;border:1px solid #cfcfcf;border-radius:3px;overflow:hidden;}' +
-                '.eo-neg-seg button{display:inline-flex;align-items:center;gap:6px;border:none;background:#fff;padding:0 12px;font-size:11px;font-weight:bold;color:#363636;cursor:pointer;white-space:nowrap;}' +
-                '.eo-neg-seg button + button{border-left:1px solid #cfcfcf;}' +
-                '.eo-neg-seg button[aria-pressed="true"]{background:#3DBD7D;color:#fff;}' +
-                '.eo-neg-seg button:disabled{opacity:.5;cursor:default;}' +
-                '.eo-neg-sel{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#909090;}' +
+                '.eo-neg-sel{align-self:center;flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#909090;margin:0 8px;}' +
                 '.eo-neg-sel select{font-size:11px;padding:4px 6px;border:1px solid #cfcfcf;border-radius:3px;background:#fff;color:#363636;max-width:200px;}' +
-                '.eo-neg-empty{font-size:11px;color:#909090;padding:0 4px;}';
+                '.eo-neg-empty{align-self:center;font-size:11px;color:#909090;padding:0 8px;}';
             var st = document.createElement('style');
             st.id = 'eo-neg-tab-css';
             st.type = 'text/css';
@@ -197,16 +192,43 @@ define([
             return $('<span class="eo-neg-chip ' + tone + '"></span>').text(c.label || '');
         },
 
+        /**
+         * A ribbon button in the editor's OWN idiom: icon above, caption below, no border, using
+         * upstream's `btn-toolbar x-huge` markup (templateHugeCaption in component/Button.js, and
+         * the `btn-slot text x-huge` slots in Toolbar.template).
+         *
+         * Reusing upstream classes rather than styling bespoke buttons means this tab inherits
+         * hover, active, disabled and every UI theme automatically, instead of drifting the first
+         * time someone switches to a dark theme. The only substitution is the glyph: upstream puts
+         * a sprite <i class="icon btn-..."> inside .inner-box-icon, we put our SVG there, because
+         * the sprite has no entry for these actions.
+         */
+        _ribbonButton: function (opts) {
+            var $slot = $('<div class="btn-slot text x-huge"></div>');
+            var $btn = $('<button type="button" class="btn btn-toolbar x-huge"></button>');
+            var $icon = $('<div class="inner-box-icon"></div>');
+            var ico = this._icon(opts.icon);
+            if (ico) $icon.append(ico);
+            $btn.append($icon);
+            $btn.append($('<div class="inner-box-caption"></div>').append($('<span class="caption"></span>').text(opts.label || '')));
+            if (opts.active) $btn.addClass('active');
+            if (opts.disabled) $btn.addClass('disabled').prop('disabled', true);
+            $btn.on('click', function () {
+                if (opts.disabled) return;
+                opts.onClick();
+            });
+            $slot.append($btn);
+            return $slot;
+        },
+
         _button: function (c) {
             var me = this;
-            var $b = $('<button type="button" class="eo-neg-btn"></button>').text(c.label || '');
-            if (c.primary) $b.addClass('primary');
-            if (c.disabled || c.busy) $b.prop('disabled', true);
-            $b.on('click', function () {
-                if (c.disabled || c.busy) return;
-                me._post({ type: 'action', id: c.id });
+            return me._ribbonButton({
+                label: c.label,
+                icon: c.icon,
+                disabled: !!(c.disabled || c.busy),
+                onClick: function () { me._post({ type: 'action', id: c.id }); },
             });
-            return $b;
         },
 
         // Icons arrive as raw SVG path geometry on a 24x24 viewBox, never as names: this file
@@ -227,22 +249,25 @@ define([
             return svg;
         },
 
+        // A run of ribbon buttons with the current one `.active` — how the editor expresses a
+        // mutually exclusive choice everywhere else (Display Mode, alignment). A bordered
+        // segmented pill would have been the only control of its kind in the whole ribbon.
         _segmented: function (c) {
             var me = this;
-            var $wrap = $('<div class="eo-neg-seg"></div>');
+            var $wrap = $('<div class="eo-neg-seg-group"></div>');
             (c.options || []).forEach(function (o) {
-                var $b = $('<button type="button"></button>');
-                var ico = me._icon(o.icon);
-                if (ico) $b.append(ico);
-                $b.append($('<span></span>').text(o.label || ''));
-                $b.attr('aria-pressed', String(o.value === c.value));
-                if (c.disabled || o.disabled) $b.prop('disabled', true);
-                $b.on('click', function () {
-                    if (c.disabled || o.disabled || o.value === c.value) return;
-                    me._post({ type: 'action', id: c.id, value: o.value });
-                });
-                $wrap.append($b);
+                $wrap.append(me._ribbonButton({
+                    label: o.label,
+                    icon: o.icon,
+                    active: o.value === c.value,
+                    disabled: !!(c.disabled || o.disabled),
+                    onClick: function () {
+                        if (o.value === c.value) return;
+                        me._post({ type: 'action', id: c.id, value: o.value });
+                    },
+                }));
             });
+            $wrap.append($('<div class="separator long"></div>'));
             return $wrap;
         },
 
