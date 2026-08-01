@@ -141,7 +141,7 @@ define([
                 '.eo-neg-controls{display:flex;align-items:stretch;overflow-x:auto;overflow-y:hidden;max-width:100%;height:100%;box-sizing:border-box;}' +
                 '.eo-neg-seg-group{display:flex;align-items:stretch;}' +
                 // Matches the sprite glyphs upstream draws in .inner-box-icon on an x-huge button.
-                '.eo-neg-ico{width:20px;height:20px;display:block;margin:0 auto;}' +
+                '.eo-neg-ico{width:28px;height:28px;display:block;margin:0 auto;}' +
                 // The chip is a status readout, not a control, so it is centred against the tall
                 // button row rather than stretched to it.
                 '.eo-neg-chip{align-self:center;flex:0 0 auto;display:inline-flex;align-items:center;' +
@@ -231,18 +231,30 @@ define([
             });
         },
 
-        // Icons arrive as raw SVG path geometry on a 24x24 viewBox, never as names: this file
-        // cannot import the app's icon set, and shipping names would mean the image carries a
-        // fixed catalogue that only a rebuild could extend. currentColor makes the glyph follow
-        // the button's own text colour, including the selected state.
-        _icon: function (pathData) {
+        /**
+         * Icons arrive as GEOMETRY — { path, viewBox } — never as names: this file cannot import
+         * the app's icon set, and names would mean the image carrying a catalogue only a rebuild
+         * could extend.
+         *
+         * The viewBox must come from the descriptor rather than be assumed here. Material Symbols
+         * exports use a 960-unit `0 -960 960 960` box while Material Icons use `0 0 24 24`; a
+         * hardcoded box renders the other set as an empty square. Defaulting to 24 keeps older
+         * descriptors that sent a bare path string working.
+         *
+         * currentColor makes the glyph follow the button's own text colour, so it tracks hover,
+         * the active state and every UI theme without any rule of ours.
+         */
+        _icon: function (icon) {
+            if (!icon) return null;
+            var pathData = (typeof icon === 'string') ? icon : icon.path;
+            var viewBox = (typeof icon === 'object' && icon.viewBox) ? icon.viewBox : '0 0 24 24';
             if (!pathData || typeof pathData !== 'string') return null;
             var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            svg.setAttribute('viewBox', '0 0 24 24');
+            svg.setAttribute('viewBox', viewBox);
             svg.setAttribute('class', 'eo-neg-ico');
             svg.setAttribute('aria-hidden', 'true');
             var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            // setAttribute, not innerHTML — this is host-supplied and must never be parsed as markup.
+            // setAttribute, not innerHTML — host-supplied, must never be parsed as markup.
             path.setAttribute('d', pathData);
             path.setAttribute('fill', 'currentColor');
             svg.appendChild(path);
