@@ -18,6 +18,15 @@
  * 'app:ready' fires, which keeps this customization to exactly two touch points — this file and the
  * app.js registration. Fewer overlay points, less to re-apply on every image build.
  *
+ * IT MUST NEVER TAKE THE EDITOR WITH IT. The first version of this file did: `app:ready` is
+ * triggered SYNCHRONOUSLY from Main.onDocumentContentReady, immediately above
+ * `api.SetDrawingFreeze(false)` and `hidePreloader()`, and Backbone lets a listener's exception
+ * escape `trigger` — so a single bad line here aborted the rest of the editor's startup, leaving a
+ * half-built ribbon and unapplied branding. Every entry point below is therefore wrapped, the
+ * app:ready handler defers its real work to a later tick, and the registration sits LAST in app.js's
+ * controller list. Nothing depends on this controller having launched, so failing alone is always
+ * the correct outcome — the dealroom simply keeps using the server patcher.
+ *
  * WHAT THIS DELIBERATELY DOES NOT DECIDE. It has no idea what a contract, a playbook or an approval
  * is. It receives text anchors and replacements, reports precisely what it could and could not do,
  * and never guesses. The dealroom keeps its server-side patcher for everything reported as failed,
@@ -78,25 +87,69 @@ define([
         views: [],
 
         initialize: function () {
-            this.addListeners({});
+            // Wrapped for the same reason as everything else below: `addListeners` reaches through
+            // `getApplication()`, and this controller must never be able to throw into the app's
+            // construction. There is nothing to recover — it simply means no bridge this session.
+            try {
+                this.addListeners({});
+            } catch (e) { /* no listeners; the controller is inert rather than fatal */ }
         },
 
+        /**
+         * NOTHING HERE MAY THROW, AND NOTHING HERE MAY RUN SYNCHRONOUSLY ON THE EDITOR'S INIT STACK.
+         *
+         * This is not general defensiveness — it is the specific lesson from shipping this file
+         * once and taking the editor down with it. `Common.NotificationCenter.trigger('app:ready')`
+         * is a SYNCHRONOUS call in Main.onDocumentContentReady, sitting directly above
+         * `api.SetDrawingFreeze(false)`, `hidePreloader()` and the rest of the document-ready
+         * sequence. Backbone propagates a listener's exception straight out of `trigger`, so ONE
+         * bad line in here aborts the remainder of the editor's own startup: the ribbon is left
+         * half-built and the branding never applies. That is exactly what happened.
+         *
+         * Two rules follow, and they are both load-bearing:
+         *   1. every entry point is wrapped — this controller can fail, but only ever alone;
+         *   2. the app:ready handler captures state and defers, so all real work happens on a
+         *      later tick where a throw cannot reach the editor's startup at all.
+         *
+         * The cost of both is a few microseconds. The cost of neither was an outage.
+         */
         onLaunch: function () {
             var me = this;
             me.api = null;
             me.appOptions = null;
-            // 'app:ready' fires from Main.onDocumentContentReady, so the document is loaded by the
-            // time it arrives — which is what makes it safe to advertise readiness to the host.
-            Common.NotificationCenter.on('app:ready', function (appOptions) {
-                me.appOptions = appOptions || {};
-                try {
-                    me.api = me.getApplication().getController('Main').api;
-                } catch (e) {
-                    me.api = null;
-                }
+            me._started = false;
+
+            try {
+                // Guarded rather than assumed: this controller launches inside someone else's
+                // ordered list, and a missing global here must degrade to "no fast path", never
+                // to a TypeError thrown into the launch chain.
+                if (!window.Common || !Common.NotificationCenter || typeof Common.NotificationCenter.on !== 'function') return;
+
+                Common.NotificationCenter.on('app:ready', function (appOptions) {
+                    try {
+                        me.appOptions = appOptions || {};
+                    } catch (e) { /* not worth failing over */ }
+                    // OFF THE INIT STACK. See the note above — this is the single change that
+                    // makes this controller incapable of breaking the editor's startup.
+                    setTimeout(function () { me._start(); }, 0);
+                });
+            } catch (e) { /* no bridge this session; the host falls back to the server path */ }
+        },
+
+        /** Everything the controller actually does at startup, on its own tick and in its own try. */
+        _start: function () {
+            var me = this;
+            if (me._started) return;
+            me._started = true;
+            try {
+                me.api = me.getApplication().getController('Main').api;
+            } catch (e) {
+                me.api = null;
+            }
+            try {
                 me._listen();
                 me._postReady();
-            });
+            } catch (e) { /* the editor is unaffected; the host simply never sees 'ready' */ }
         },
 
         // ===============================================================
@@ -111,16 +164,24 @@ define([
             var p = null;
             try {
                 p = new URLSearchParams(window.location.search).get('parentOrigin');
+                // VALIDATED, not just read. postMessage throws a SyntaxError on a targetOrigin it
+                // cannot parse, and this value arrives on the URL — so an absent, truncated or
+                // malformed parentOrigin would otherwise become an exception at the worst moment.
+                // Round-tripping through URL also normalises it, so the string we compare inbound
+                // origins against is the same shape the browser reports.
+                p = p ? new URL(p).origin : null;
             } catch (e) { p = null; }
             this._parentOrigin = p || null;
             return this._parentOrigin;
         },
 
         _post: function (msg) {
-            var origin = this.parentOrigin();
-            if (!origin || window.parent === window) return;
-            msg.__tl = CHANNEL;
-            window.parent.postMessage(msg, origin);
+            try {
+                var origin = this.parentOrigin();
+                if (!origin || window.parent === window) return;
+                msg.__tl = CHANNEL;
+                window.parent.postMessage(msg, origin);
+            } catch (e) { /* the host just does not hear from us; nothing else is affected */ }
         },
 
         /**
@@ -148,15 +209,22 @@ define([
             if (me._listening) return;
             me._listening = true;
             window.addEventListener('message', function (e) {
-                // Two independent checks: the origin must be the embedding page, and the message
-                // must actually come from it — origin alone would accept a same-origin subframe.
-                if (!me.parentOrigin() || e.origin !== me.parentOrigin()) return;
-                if (e.source !== window.parent) return;
-                var d = e.data;
-                if (!d || d.__tl !== CHANNEL) return;
-                if (d.type === 'ping') { me._postReady(); return; }
-                if (d.type !== 'apply') return;
-                me._onApply(d);
+                try {
+                    // Two independent checks: the origin must be the embedding page, and the
+                    // message must actually come from it — origin alone would accept a
+                    // same-origin subframe.
+                    if (!me.parentOrigin() || e.origin !== me.parentOrigin()) return;
+                    if (e.source !== window.parent) return;
+                    var d = e.data;
+                    if (!d || d.__tl !== CHANNEL) return;
+                    if (d.type === 'ping') { me._postReady(); return; }
+                    if (d.type !== 'apply') return;
+                    me._onApply(d);
+                } catch (err) {
+                    // The host is waiting on a result it will now never get, and its own timeout
+                    // routes the batch to the server patcher. Silence here costs one slow apply;
+                    // an escaping throw costs whatever else is listening on this window.
+                }
             });
         },
 

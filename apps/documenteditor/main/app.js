@@ -140,7 +140,6 @@ require([
             'HeaderFooterTab',
             'StyleTab',
             'NegotiationTab',
-            'DocumentEdits',
             'Search',
             'DocProtection',
             'Print',
@@ -159,6 +158,11 @@ require([
             ,'Common.Controllers.ReviewChanges'
             ,'Common.Controllers.Protection'
             ,'Common.Controllers.Shortcuts'
+            // top.legal: LAST on purpose. Controllers launch in this order, so anything that
+            // fails here can only ever strand itself — never a controller the editor needs.
+            // It renders nothing and is only reached over postMessage, so nothing depends on
+            // it having launched, which is exactly what makes last the correct position.
+            ,'DocumentEdits'
         ]
     });
 
@@ -187,7 +191,6 @@ require([
                 'documenteditor/main/app/controller/HeaderFooterTab',
                 'documenteditor/main/app/controller/StyleTab',
                 'documenteditor/main/app/controller/NegotiationTab',
-                'documenteditor/main/app/controller/DocumentEdits',
                 'documenteditor/main/app/controller/Search',
                 'documenteditor/main/app/controller/DocProtection',
                 'documenteditor/main/app/controller/Print',
@@ -195,6 +198,7 @@ require([
                 'common/main/lib/controller/Fonts',
                 'common/main/lib/controller/History'
                 /** coauthoring begin **/
+                ,'documenteditor/main/app/controller/DocumentEdits'
                 ,'common/main/lib/controller/Comments'
                 ,'common/main/lib/controller/Chat'
                 /** coauthoring end **/
