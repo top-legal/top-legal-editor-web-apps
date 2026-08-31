@@ -1,8 +1,13 @@
 /*
- * top.legal — Negotiation tab (native)
+ * top.legal — host-driven ribbon tabs (native)
  * ------------------------------------------------------------------
- * A "Negotiation" ribbon tab that renders whatever the host dealroom tells it to, and reports
- * activations back. It contains NO negotiation logic: no turns, no modes, no contracts.
+ * One or more ribbon tabs that render whatever the host dealroom tells them to, and report
+ * activations back. They contain NO business logic: no turns, no modes, no contracts, and nothing
+ * that knows what any particular tab is for.
+ *
+ * The filename and the controller id are historical — this began as a single "Negotiation" tab.
+ * They are kept because renaming them would touch app.js and Toolbar.js for no functional gain,
+ * and every file this fork adds has to be re-applied as an overlay on each image build.
  *
  * Why: this file lives in the DocumentServer image, and changing that image costs a ~26 minute
  * CodeBuild plus a container swap that interrupts dev, beta and prod together (one container
@@ -21,9 +26,21 @@
  * who needs to see whose turn it is.
  *
  * Wire protocol (both directions carry __tl so unrelated traffic is ignored cheaply):
- *   app  -> tab : { __tl:'tl-office-ribbon', type:'descriptor', payload:{version,tab,controls} }
+ *   app  -> tab : { __tl:'tl-office-ribbon', type:'descriptor',
+ *                   payload:{ version, tabs:[{id,label,controls}], tab, controls, style?, css? } }
  *   tab  -> app : { __tl:'tl-office-ribbon', type:'ready' }
  *   tab  -> app : { __tl:'tl-office-ribbon', type:'action', id, value? }
+ *
+ * TABS. `tabs` is the current shape; `tab`/`controls` are the original single-tab shape and are
+ * still accepted, because an app deployed against this image may predate the change. The first
+ * entry in `tabs` is the PRIMARY tab: Toolbar.js builds its panel during toolbar construction,
+ * before any descriptor can have arrived. Every later entry is created lazily, the first time a
+ * descriptor names it — Mixtbar.addTab is pure DOM plus a config splice and re-syncs its own
+ * element caches, so it is safe to call after the toolbar is up.
+ *
+ * Tabs are never removed once created. A descriptor that stops naming a tab simply leaves it
+ * empty: tearing tabs out of a live ribbon risks orphaning the active panel, and no host has
+ * wanted it.
  */
 define([
     'core'
@@ -34,6 +51,16 @@ define([
 
     var CHANNEL = 'tl-office-ribbon';
     var SUPPORTED_VERSION = 1;
+    // The tab Toolbar.js builds during toolbar construction. Must match tabs[0].id from the host.
+    var PRIMARY_TAB_ID = 'negotiation';
+    // Where the primary tab sits in Mixtbar's tab list. Toolbar.js inserts it with after=1, and
+    // addTab splices at after+1, so it lands at index 2 and extra tabs follow at 2, 3, ...
+    //
+    // This mirrors an insertion index rather than reading one back, because Mixtbar keeps its tab
+    // config in a closure. If the assumption is ever wrong (Style absent in a read-only session,
+    // say), addTab walks back to the nearest real tab and inserts there: the extra tab lands in a
+    // different POSITION, never in a broken state.
+    var PRIMARY_TAB_AFTER = 1;
 
     DE.Controllers.NegotiationTab = Backbone.Controller.extend(_.extend({
         models: [],
@@ -57,6 +84,10 @@ define([
 
         setConfig: function (config) {
             this.toolbar = config.toolbar;
+            // config.toolbar is the Toolbar CONTROLLER; its own `.toolbar` is the Mixtbar view
+            // that owns addTab/setVisible. Reached defensively: a future upstream reshuffle here
+            // must cost us extra tabs, not the primary one.
+            this.toolbarView = (config.toolbar && config.toolbar.toolbar) || null;
             this.appConfig = config.mode;
             return this;
         },
@@ -108,23 +139,65 @@ define([
         // ===============================================================
         // Panel (ribbon content)
         // ===============================================================
+        /**
+         * Build the PRIMARY tab's panel. Called once by Toolbar.js while the toolbar is being
+         * constructed, long before any descriptor exists — which is exactly why the primary tab
+         * cannot be descriptor-declared like the others.
+         */
         createToolbarPanel: function () {
             var me = this;
             me._injectStyles();
-            me._panel = $(
-                '<section class="panel" data-tab="negotiation" role="tabpanel" aria-labelledby="negotiation">' +
-                    '<div class="group eo-neg-group">' +
-                        '<div class="eo-neg-controls" id="eo-neg-controls"></div>' +
-                    '</div>' +
-                '</section>'
-            );
-            me.$controls = me._panel.find('#eo-neg-controls');
+            me._panels = {};
+            me._panel = me._makePanel(PRIMARY_TAB_ID);
             me._render();       // empty state until the host sends a descriptor
             me._listen();
             // The host may have been ready long before this tab was built (and rebuilds it on
             // every remount), so ask rather than wait to be told.
             me._post({ type: 'ready' });
             return me._panel;
+        },
+
+        /**
+         * The panel markup for one tab. `id` is constrained by the host to [a-z][a-z0-9]* — it is
+         * interpolated into markup and, in the app's own CSS, into an attribute selector.
+         */
+        _makePanel: function (id) {
+            var $panel = $(
+                '<section class="panel" data-tab="' + id + '" role="tabpanel" aria-labelledby="' + id + '">' +
+                    '<div class="group eo-neg-group">' +
+                        '<div class="eo-neg-controls"></div>' +
+                    '</div>' +
+                '</section>'
+            );
+            this._panels[id] = { $panel: $panel, $controls: $panel.find('.eo-neg-controls') };
+            if (id === PRIMARY_TAB_ID) this.$controls = this._panels[id].$controls;
+            return $panel;
+        },
+
+        /**
+         * Create a ribbon tab that did not exist at toolbar-build time.
+         *
+         * Wrapped in try/catch on purpose: Mixtbar is upstream code we overlay rather than own, and
+         * an extra tab failing to appear must never take the editor — or the primary tab — with it.
+         */
+        _ensureTab: function (id, label, position) {
+            var me = this;
+            if (me._panels[id]) return true;
+            if (!me.toolbarView || typeof me.toolbarView.addTab !== 'function') return false;
+
+            try {
+                var $panel = me._makePanel(id);
+                me.toolbarView.addTab(
+                    { action: id, caption: label || id, layoutname: 'toolbar-' + id, dataHintTitle: (label || id).charAt(0) },
+                    $panel,
+                    position
+                );
+                if (typeof me.toolbarView.setVisible === 'function') me.toolbarView.setVisible(id, true);
+                return true;
+            } catch (e) {
+                delete me._panels[id];
+                return false;
+            }
         },
 
         getButtons: function () { return []; },
@@ -172,16 +245,61 @@ define([
         // Rendering — one branch per widget type. Adding a type here is the
         // only change that requires rebuilding the image.
         // ===============================================================
+        /**
+         * Normalise whichever descriptor shape arrived into one list of tabs.
+         *
+         * `tabs` is the current shape. `tab`/`controls` is the original single-tab one, still
+         * accepted because the app and this image are deployed independently — one container
+         * serves dev, beta and prod, so there is always a window where an older app is talking to
+         * a newer image.
+         */
+        _tabsOf: function (d) {
+            if (!d) return [];
+            if (Array.isArray(d.tabs) && d.tabs.length) {
+                return d.tabs.filter(function (tabSpec) {
+                    // The id reaches markup and an attribute selector; anything else is dropped
+                    // rather than sanitised, so a malformed descriptor cannot inject either.
+                    return tabSpec && typeof tabSpec.id === 'string' && /^[a-z][a-z0-9]*$/i.test(tabSpec.id);
+                });
+            }
+            return [{ id: PRIMARY_TAB_ID, label: null, controls: d.controls || [] }];
+        },
+
         _render: function () {
             var me = this;
-            if (!me.$controls) return;
-            me.$controls.empty();
+            if (!me._panels || !me.$controls) return;
 
             me._applyStyle();
 
-            var controls = (me.descriptor && me.descriptor.controls) || [];
+            var tabs = me._tabsOf(me.descriptor);
+            var extraIndex = 0;
+
+            tabs.forEach(function (tabSpec) {
+                if (tabSpec.id !== PRIMARY_TAB_ID) {
+                    extraIndex += 1;
+                    // Created once, then only re-rendered. A tab the host stops sending is left
+                    // in place and simply empties — see the TABS note in the file header.
+                    if (!me._ensureTab(tabSpec.id, tabSpec.label, PRIMARY_TAB_AFTER + extraIndex)) return;
+                }
+                var slot = me._panels[tabSpec.id];
+                if (slot) me._renderControls(slot.$controls, tabSpec.controls || []);
+            });
+
+            // Tabs the descriptor no longer names keep their place but show the empty state, so a
+            // host that drops a tab mid-session leaves nothing stale on screen.
+            Object.keys(me._panels).forEach(function (id) {
+                var stillNamed = tabs.some(function (tabSpec) { return tabSpec.id === id; });
+                if (!stillNamed) me._renderControls(me._panels[id].$controls, []);
+            });
+        },
+
+        /** One branch per widget type. Adding a TYPE here is the only change that needs a rebuild. */
+        _renderControls: function ($controls, controls) {
+            var me = this;
+            $controls.empty();
+
             if (!controls.length) {
-                me.$controls.append($('<span class="eo-neg-empty"></span>').text('—'));
+                $controls.append($('<span class="eo-neg-empty"></span>').text('—'));
                 return;
             }
 
@@ -192,7 +310,7 @@ define([
                 else if (c.type === 'button')    $el = me._button(c);
                 else if (c.type === 'segmented') $el = me._segmented(c);
                 else if (c.type === 'select')    $el = me._select(c);
-                if ($el) me.$controls.append($el);
+                if ($el) $controls.append($el);
             });
         },
 
@@ -212,12 +330,19 @@ define([
          */
         _applyStyle: function () {
             var d = this.descriptor || {};
-            if (this.$controls && d.style && typeof d.style === 'object') {
-                var el = this.$controls[0];
-                Object.keys(d.style).forEach(function (k) {
-                    // Token names are constrained so a descriptor cannot set arbitrary inline CSS.
-                    if (!/^[a-z0-9-]+$/i.test(k)) return;
-                    el.style.setProperty('--eo-neg-' + k, String(d.style[k]));
+            var panels = this._panels || {};
+            if (d.style && typeof d.style === 'object') {
+                // Applied to EVERY host panel, not just the primary one: the tokens describe the
+                // shared widget vocabulary, so a button in one tab must not size differently
+                // from the same button in another.
+                Object.keys(panels).forEach(function (id) {
+                    var el = panels[id].$controls[0];
+                    if (!el) return;
+                    Object.keys(d.style).forEach(function (k) {
+                        // Token names are constrained so a descriptor cannot set arbitrary inline CSS.
+                        if (!/^[a-z0-9-]+$/i.test(k)) return;
+                        el.style.setProperty('--eo-neg-' + k, String(d.style[k]));
+                    });
                 });
             }
             var host = document.getElementById('eo-neg-host-css');
