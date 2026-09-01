@@ -369,9 +369,27 @@ define([
             // if we later add a client-side guard on the async callback.
             if (!this.api.asc_findText(settings, true)) return 'not_found';
 
-            if (edit.reason) this._addAiComment(edit.reason);
+            /**
+             * A COMMENT-ONLY EDIT MUST NOT REPORT SUCCESS WITHOUT WRITING ONE. The note IS the
+             * change here, so there is nothing to be best-effort about: no text, or a comment the
+             * editor refused, is a failure the host can retry through the server patcher.
+             *
+             * The observed bug was the opposite — a comment-only proposal arrived with no text and
+             * was reported applied, so comments appeared only when a redline happened to be applied
+             * alongside them.
+             */
+            if (kind === 'comment') {
+                if (!edit.reason) return 'error';
+                return this._addAiComment(edit.reason) ? true : 'error';
+            }
 
-            if (kind === 'comment') return true;
+            /**
+             * For a REDLINE the comment stays best-effort, deliberately: the change is what the user
+             * approved, and a failed annotation must not sink it. Added before the replace so it
+             * anchors to the ORIGINAL wording, which survives as a strikethrough once the deletion
+             * is tracked.
+             */
+            if (edit.reason) this._addAiComment(edit.reason);
 
             /**
              * RE-FIND BEFORE REPLACING. Not defensive — required.
@@ -431,13 +449,14 @@ define([
          * counterparty's copy. eoGroupUserName takes the display name as its second argument
          * precisely so both can be expressed at once.
          *
-         * Best-effort by design: a comment that fails to attach must not fail the redline it
-         * annotates — the change is the thing the user approved.
+         * Returns whether a comment was actually written. A redline's caller ignores it — a failed
+         * annotation must not sink the change it annotates — but a comment-only edit depends on it,
+         * because there the comment IS the change.
          */
         _addAiComment: function (reason) {
             try {
                 var comments = this.getApplication().getController('Common.Controllers.Comments');
-                if (!comments) return;
+                if (!comments) return false;
 
                 // Mirrors Comments.js's own buildCommentData(): the document editor needs the Word
                 // subclass, and the base class is only a fallback. That helper is module-private
@@ -457,7 +476,10 @@ define([
                 comment.asc_putUserName(comments.eoGroupUserName(AI_COMMENT_SCOPE, AI_AUTHOR));
 
                 this.api.asc_addComment(comment);
-            } catch (e) { /* the redline still stands */ }
+                return true;
+            } catch (e) {
+                return false;
+            }
         },
 
     }, DE.Controllers.DocumentEdits || {}));
