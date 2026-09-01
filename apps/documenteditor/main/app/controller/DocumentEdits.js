@@ -373,9 +373,52 @@ define([
 
             if (kind === 'comment') return true;
 
-            // 'delete' is a replace with nothing: with revisions on, the editor records it as a
-            // deletion rather than removing the text.
-            return this.api.asc_replaceText(settings, kind === 'delete' ? '' : replacement, false) ? true : 'not_found';
+            /**
+             * RE-FIND BEFORE REPLACING. Not defensive — required.
+             *
+             * asc_replaceText acts on the CURRENT search result, and adding the comment above moves
+             * the selection, which silently invalidates it. Without this second find the replace
+             * does nothing at all AND STILL RETURNS TRUTHY: the observed failure was a document
+             * carrying the assistant's comments with none of its redlines, reported to the user as
+             * fully applied. Verified locally — original text still present, replacement absent,
+             * asc_HaveRevisionsChanges false, and the batch reported as applied.
+             *
+             * Comment first and then re-find (rather than replacing first) so the comment anchors to
+             * the ORIGINAL wording, which survives as a strikethrough once the deletion is tracked.
+             * That matches what the server-side patcher does, so both paths read the same in Word.
+             */
+            if (!this.api.asc_findText(settings, true)) return 'not_found';
+
+            /**
+             * IGNORE WHAT asc_replaceText RETURNS. It is not a success flag — measured in the local
+             * editor, it returned TRUE for a replace that provably did nothing (stale search state)
+             * and FALSE for one that worked, leaving the replacement in the document with the
+             * revision recorded. Branching on it gets the answer backwards either way.
+             *
+             * 'delete' is a replace with nothing: with revisions on the editor records a deletion
+             * rather than removing the text.
+             */
+            this.api.asc_replaceText(settings, kind === 'delete' ? '' : replacement, false);
+
+            /**
+             * Success is confirmed from the DOCUMENT instead: the replacement has to be findable.
+             * This is what turns "reported applied but nothing happened" — a document carrying the
+             * assistant's comments and none of its redlines — into an honest 'not_found' that the
+             * host retries through the server patcher.
+             *
+             * A delete cannot be verified this way: with revisions on the text survives as a tracked
+             * strikethrough, so searching for it proves nothing either way. It is reported as
+             * applied on the strength of the find above, which is the weaker guarantee of the two.
+             */
+            if (kind === 'replace') {
+                var check = new AscCommon.CSearchSettings();
+                check.put_Text(replacement);
+                check.put_MatchCase(true);
+                check.put_WholeWords(false);
+                if (!this.api.asc_findText(check, true)) return 'not_found';
+            }
+
+            return true;
         },
 
         /**
