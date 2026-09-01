@@ -22,7 +22,7 @@
         <div class="inner-edit-ct">
             <textarea class="msg-reply user-select" maxlength="maxCommLength" spellcheck="false" <% if (!!dummy) { %> placeholder="textMentionComment"<% } %> aria-label="textComment"><%-comment%></textarea>
             <% if (hideAddReply) { %>
-                <div class="eo-scope-row"><span class="eo-scope-label">Visible to:</span><select class="eo-scope-select eo-scope-popover"><option value="shared">Both teams (shared)</option><option value="internal">Internal team only</option><option value="external">External team only</option></select></div>
+                <div class="eo-scope-row"><span class="eo-scope-label">Visible to:</span><select class="eo-scope-select eo-scope-popover canfocused"><option value="shared">Both teams (shared)</option><option value="internal">Internal team only</option><option value="external">External team only</option></select></div>
             <% } %>
             <% if (hideAddReply) { %>
                 <button class="btn normal dlg-btn primary btn-inner-edit" id="id-comments-change-popover">textAdd</button>

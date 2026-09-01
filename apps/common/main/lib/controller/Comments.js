@@ -221,6 +221,15 @@ define([
         },
 
         // ---- top.legal: team-scoped comments ---------------------------------
+        // The <select class="eo-scope-select"> in the two comment templates MUST keep the
+        // `canfocused` class. The SDK installs a document-level focus handler (sdk-all.js
+        // focusHtmlElement) that yanks focus back to its hidden textarea#area_id for any element
+        // it does not recognise as a keyboard consumer; _getDefaultKeyboardInput recognises one
+        // only by the classes dropdown-menu / dropdown-toggle / dropdown-submenu / canfocused,
+        // and a bare <select> is not "editable". Without the class, focus is stolen between
+        // mousedown and mouseup and the native dropdown closes before it can be seen — the
+        // control looks dead. Measured in the running editor 2026-09-01.
+        //
         // Scope ('internal'|'external'|'shared') is stored in the comment's userData
         // (as JSON). userData round-trips through save/reload, unlike the comment guid
         // (m_nDurableId), which is regenerated on load. Absent/invalid => 'shared'.
