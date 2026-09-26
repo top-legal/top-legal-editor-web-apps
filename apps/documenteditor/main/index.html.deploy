@@ -22,8 +22,8 @@
             --sk-background-toolbar: #f3f3f3;
             --sk-background-toolbar-controls: #fff;
             --sk-canvas-background: #f3f3f3;
-            /* top.legal: brand secondary, matching --toolbar-header-document */
-            --sk-background-toolbar-header-word: #3DBD7D;
+            /* top.legal: dealroom header blue, matching --toolbar-header-document (theme.less) */
+            --sk-background-toolbar-header-word: #5678A4;
             --sk-background-toolbar-tab: #eaeaea;
             --sk-background-toolbar-button: #f9f9f9;
             --sk-layout-padding-toolbar-controls: 0 8px;
@@ -90,7 +90,7 @@
 
         .loadmask > .brendpanel {
             min-height: 28px;
-            background: #3DBD7D;
+            background: #5678A4;
             background: var(--sk-background-toolbar-header-word);
             padding: var(--sk-layout-padding-header);
         }

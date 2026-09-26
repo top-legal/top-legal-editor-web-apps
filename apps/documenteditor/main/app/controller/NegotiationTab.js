@@ -31,6 +31,9 @@
  *   tab  -> app : { __tl:'tl-office-ribbon', type:'ready' }
  *   tab  -> app : { __tl:'tl-office-ribbon', type:'action', id, value? }
  *
+ * ANCHORS (same channel, `anchors:*` types) — text ranges the host can attach things to, used for
+ * tasks. See the "Anchors" section below for the messages and why they are built this way.
+ *
  * TABS. `tabs` is the current shape; `tab`/`controls` are the original single-tab shape and are
  * still accepted, because an app deployed against this image may predate the change. The first
  * entry in `tabs` is the PRIMARY tab: Toolbar.js builds its panel during toolbar construction,
@@ -79,6 +82,9 @@ define([
 
         setApi: function (api) {
             this.api = api;
+            // Called from Toolbar.js mid-construction: an exception here would abort the toolbar
+            // build, so anchors fail alone (see DocumentEdits.js for the incident that taught this).
+            try { this._bindAnchorEvents(); } catch (e) { /* anchors unavailable, editor unaffected */ }
             return this;
         },
 
@@ -126,7 +132,12 @@ define([
                 if (!me.parentOrigin() || e.origin !== me.parentOrigin()) return;
                 if (e.source !== window.parent) return;
                 var d = e.data;
-                if (!d || d.__tl !== CHANNEL || d.type !== 'descriptor') return;
+                if (!d || d.__tl !== CHANNEL) return;
+                if (typeof d.type === 'string' && d.type.indexOf('anchors:') === 0) {
+                    me._onAnchorMessage(d);
+                    return;
+                }
+                if (d.type !== 'descriptor') return;
                 var payload = d.payload;
                 // An app newer than this image may speak a shape we cannot draw. Declining is
                 // better than rendering it half-right: the dealroom strip is still there.
@@ -477,6 +488,275 @@ define([
             });
             $wrap.append($sel);
             return $wrap;
+        },
+
+        // ===============================================================
+        // Anchors — host-owned text ranges (tasks)
+        // ===============================================================
+        /*
+         * An anchor is a HIDDEN bookmark (the leading "_" keeps it out of this editor's and Word's
+         * bookmark lists). It is document content: it syncs to co-editors, is saved in the docx,
+         * follows its text through edits, and depends on no comment — so a task created from a
+         * comment stays on its text when the comment is deleted.
+         *
+         * The HIGHLIGHT is not document content. It is drawn with the runs' CollaborativeMarks, the
+         * layer behind "changes by other users", which is per client: no history point, nothing in
+         * the change stream, nothing in the saved file. Measured 2026-09-26: a second session received
+         * the bookmark and zero marks. The host sends `anchors:set` to internal users only, so the
+         * counterparty never sees a highlight.
+         *
+         * The engine clears marks on runs another user edited (on save), and text typed inside a range
+         * starts unmarked, so the highlight is re-applied after every change.
+         *
+         *   app -> tab : anchors:set      { anchors:[{name, color?}] }  highlight exactly these
+         *   app -> tab : anchors:capture  { requestId }                  remember the selection
+         *   tab -> app : anchors:captured { requestId, text, canAnchor }
+         *   app -> tab : anchors:create   { name, requestId | commentGuid }
+         *   tab -> app : anchors:created  { name, ok, text?, reason? }
+         *   app -> tab : anchors:goto     { name }                       select + scroll to it
+         *   app -> tab : anchors:remove   { name }
+         *   tab -> app : anchors:clicked  { name }                       a click landed in one
+         *
+         * Names come from the host and end up in the document, so they are restricted to
+         * `_tl` + [A-Za-z0-9_-]. Everything here is wrapped: a highlight must never take the editor
+         * down with it.
+         */
+        _anchorNameOk: function (name) {
+            return typeof name === 'string' && /^_tl[A-Za-z0-9_-]{1,80}$/.test(name);
+        },
+
+        _logicDoc: function () {
+            var wc = this.api && this.api.WordControl;
+            return (wc && wc.m_oLogicDocument) || null;
+        },
+
+        // Creating or removing a bookmark is an edit. A read-only session (turn-based, without the
+        // turn) can still highlight and navigate, but cannot anchor.
+        _canEditDoc: function () {
+            var ld = this._logicDoc();
+            try { return !!(ld && ld.CanEdit()); } catch (e) { return false; }
+        },
+
+        _bindAnchorEvents: function () {
+            var me = this;
+            if (me._anchorEventsBound || !me.api || typeof me.api.asc_registerCallback !== 'function') return;
+            me._anchorEventsBound = true;
+            me._anchors = [];
+            me._anchorRuns = {};   // run id -> { name, rgb } as of the last apply
+            me._captures = {};
+            var reapply = function () { me._scheduleAnchorApply(); };
+            ['asc_onDocumentContentReady', 'asc_onDocumentChanged', 'asc_onBookmarksUpdate',
+                'asc_onCollaborativeChanges', 'asc_onApplyChanges', 'asc_onUndoRedoInCollaboration']
+                .forEach(function (ev) { me.api.asc_registerCallback(ev, reapply); });
+            // A pointer event rather than a selection event: only a click should open a task, never
+            // the caret arriving in a range by keyboard. pointerup, not mouseup — the editor handles
+            // pointer events on #id_viewer_overlay and the compatibility mouse events never arrive.
+            document.addEventListener('pointerup', function (e) {
+                if (!me._anchors.length) return;
+                var host = document.getElementById('editor_sdk');
+                if (!host || !host.contains(e.target)) return;
+                setTimeout(function () { me._checkAnchorClick(); }, 0);
+            }, true);
+        },
+
+        _onAnchorMessage: function (d) {
+            var me = this;
+            try {
+                if (d.type === 'anchors:set') {
+                    me._anchors = (Array.isArray(d.anchors) ? d.anchors : [])
+                        .filter(function (a) { return a && me._anchorNameOk(a.name); })
+                        .slice(0, 500);
+                    me._applyAnchors();
+                } else if (d.type === 'anchors:capture') {
+                    me._captureSelection(d.requestId);
+                } else if (d.type === 'anchors:create') {
+                    me._createAnchor(d);
+                } else if (d.type === 'anchors:goto') {
+                    me._gotoAnchor(d.name);
+                } else if (d.type === 'anchors:remove') {
+                    me._removeAnchor(d.name);
+                }
+            } catch (e) { /* see the section header */ }
+        },
+
+        /**
+         * Snapshot the selection when the host starts creating something, and anchor to THAT later.
+         * Focus moves into the host's dialog in between, and the snapshot is what the user pointed
+         * at when they clicked — not wherever the caret happens to be when the dialog is saved.
+         */
+        _captureSelection: function (requestId) {
+            var me = this, ld = me._logicDoc();
+            if (typeof requestId !== 'string' || !requestId) return;
+            var text = '', state = null;
+            if (ld && ld.IsSelectionUse() && !ld.IsSelectionEmpty()) {
+                text = ld.GetSelectedText(false) || '';
+                state = ld.GetSelectionState();
+            }
+            var keys = Object.keys(me._captures);
+            if (keys.length > 20) delete me._captures[keys[0]];   // abandoned dialogs
+            me._captures[requestId] = state;
+            me._post({ type: 'anchors:captured', requestId: requestId, text: String(text).slice(0, 500), canAnchor: !!state && me._canEditDoc() });
+        },
+
+        _createAnchor: function (d) {
+            var me = this, ld = me._logicDoc();
+            var reply = function (ok, extra) { me._post(_.extend({ type: 'anchors:created', name: d.name, ok: ok }, extra || {})); };
+            if (!me._anchorNameOk(d.name)) return;
+            var captured = null;
+            if (typeof d.requestId === 'string') {
+                captured = me._captures[d.requestId] || null;
+                delete me._captures[d.requestId];
+            }
+            if (!ld) return reply(false, { reason: 'notReady' });
+            if (!me._canEditDoc()) return reply(false, { reason: 'readOnly' });
+
+            if (captured) {
+                ld.SetSelectionState(captured);
+            } else if (typeof d.commentGuid === 'string' && d.commentGuid) {
+                var cid = ld.Comments.GetCommentIdByGuid(d.commentGuid);
+                var comment = cid ? ld.Comments.Get_ById(cid) : null;
+                // A document-level comment has no text to anchor to.
+                if (!comment || comment.IsGlobalComment() || false === comment.SelectCommentText()) return reply(false, { reason: 'noRange' });
+            } else {
+                return reply(false, { reason: 'noRange' });
+            }
+            if (!ld.IsSelectionUse() || ld.IsSelectionEmpty()) {
+                ld.RemoveSelection();
+                return reply(false, { reason: 'noRange' });
+            }
+
+            var text = ld.GetSelectedText(false) || '';
+            // AddBookmark runs its own lock check and history action, so this is an ordinary edit that
+            // co-editors receive. Its only failure mode is that lock, and it reports it by not adding.
+            ld.AddBookmark(d.name);
+            var chars = ld.GetBookmarksManager().GetBookmarkByName(d.name);
+            // Collapse to the end of the new range: the selection we set was ours, not the user's.
+            if (chars) chars[1].GoToBookmark(); else ld.RemoveSelection();
+            ld.UpdateSelection();
+            ld.UpdateInterface();
+            if (!chars) return reply(false, { reason: 'locked' });
+            reply(true, { text: String(text).slice(0, 500) });
+            me._scheduleAnchorApply();
+        },
+
+        _gotoAnchor: function (name) {
+            var ld = this._logicDoc();
+            if (!ld || !this._anchorNameOk(name) || !ld.GetBookmarksManager().GetBookmarkByName(name)) return;
+            this._suppressClickUntil = Date.now() + 600;   // selecting it is not the user clicking it
+            ld.GoToBookmark(name, true);
+            ld.UpdateSelection();
+            ld.UpdateInterface();
+        },
+
+        _removeAnchor: function (name) {
+            var ld = this._logicDoc();
+            if (!ld || !this._anchorNameOk(name) || !this._canEditDoc()) return;
+            if (!ld.GetBookmarksManager().GetBookmarkByName(name)) return;
+            ld.RemoveBookmark(name);
+        },
+
+        _scheduleAnchorApply: function () {
+            var me = this;
+            if (me._anchorTimer) clearTimeout(me._anchorTimer);
+            me._anchorTimer = setTimeout(function () {
+                me._anchorTimer = null;
+                try { me._applyAnchors(); } catch (e) { /* see the section header */ }
+            }, 250);
+        },
+
+        /**
+         * The runs a bookmark covers, in document order. Inserting a bookmark splits runs at its
+         * edges, so whole runs are exactly the range. The end marker carries no usable name, so the
+         * walk matches the two marker OBJECTS the manager returns.
+         */
+        _runsInBookmark: function (ld, name) {
+            var chars = ld.GetBookmarksManager().GetBookmarkByName(name);
+            if (!chars) return [];
+            var startPara = chars[0].GetParagraph(), endPara = chars[1].GetParagraph();
+            if (!startPara || !endPara) return [];
+            var paras = [startPara];
+            if (startPara !== endPara) {
+                var all = ld.GetAllParagraphs({ OnlyMainDocument: true, All: true }) || [];
+                var s = all.indexOf(startPara), e = all.indexOf(endPara);
+                if (s < 0 || e < s) return [];   // header/footnote, or not in the main flow
+                paras = all.slice(s, e + 1);
+            }
+            var out = [], inside = false;
+            var walk = function (content) {
+                for (var i = 0; i < content.length; i++) {
+                    var el = content[i];
+                    if (!el) continue;
+                    if (el === chars[0]) { inside = true; continue; }
+                    if (el === chars[1]) { inside = false; continue; }
+                    if (el instanceof AscWord.ParaRun) { if (inside) out.push(el); continue; }
+                    if (Array.isArray(el.Content)) walk(el.Content);   // hyperlinks, inline content controls
+                }
+            };
+            paras.forEach(function (p) { walk(p.Content); });
+            return out;
+        },
+
+        _rgb: function (color) {
+            var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color || '');
+            // Default: a soft amber that reads as "attention" on white and is distinct from every
+            // co-editor colour the engine assigns.
+            return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 224, 138];
+        },
+
+        // Remove only the ranges in our colour — the same run can carry a real co-editor's marks.
+        _unmarkRun: function (run, rgb) {
+            var ranges = run.CollaborativeMarks.Ranges;
+            for (var i = ranges.length - 1; i >= 0; i--) {
+                var c = ranges[i].Color;
+                if (c && c.r === rgb[0] && c.g === rgb[1] && c.b === rgb[2]) ranges.splice(i, 1);
+            }
+        },
+
+        _applyAnchors: function () {
+            var me = this, ld = me._logicDoc();
+            if (!ld || !window.AscWord || !AscWord.CDocumentColor || !AscWord.ParaRun) return;
+            var next = {}, changed = false;
+            (me._anchors || []).forEach(function (a) {
+                var rgb = me._rgb(a.color);
+                me._runsInBookmark(ld, a.name).forEach(function (run) {
+                    next[run.Id] = { name: a.name, rgb: rgb };
+                    var len = run.Content.length;
+                    var covered = run.CollaborativeMarks.Ranges.some(function (r) {
+                        return r.PosS <= 0 && r.PosE >= len && r.Color && r.Color.r === rgb[0] && r.Color.g === rgb[1] && r.Color.b === rgb[2];
+                    });
+                    if (covered) return;
+                    // Typing inside a marked run leaves our colour in pieces around the new text;
+                    // replace them with one full-width range.
+                    me._unmarkRun(run, rgb);
+                    run.CollaborativeMarks.Add(0, len, new AscWord.CDocumentColor(rgb[0], rgb[1], rgb[2]));
+                    changed = true;
+                });
+            });
+            // Runs we marked last time that are no longer ours: the task closed or the anchor went.
+            Object.keys(me._anchorRuns || {}).forEach(function (runId) {
+                if (next[runId]) return;
+                var run = AscCommon.g_oTableId.Get_ById(runId);
+                if (run && run.CollaborativeMarks) { me._unmarkRun(run, me._anchorRuns[runId].rgb); changed = true; }
+            });
+            me._anchorRuns = next;
+            if (changed) {
+                ld.DrawingDocument.ClearCachePages();
+                ld.DrawingDocument.FirePaint();
+            }
+        },
+
+        _checkAnchorClick: function () {
+            var me = this, ld = me._logicDoc();
+            if (!ld || Date.now() < (me._suppressClickUntil || 0)) return;
+            try {
+                // A drag-selection that happens to start in a range is not a click on it.
+                if (ld.IsSelectionUse() && !ld.IsSelectionEmpty()) return;
+                var p = ld.GetCurrentParagraph();
+                if (!p || !p.GetClassByPos) return;
+                var run = p.GetClassByPos(p.Get_ParaContentPos(false, false));
+                var hit = run && me._anchorRuns[run.Id];
+                if (hit) me._post({ type: 'anchors:clicked', name: hit.name });
+            } catch (e) { /* see the section header */ }
         },
     }, DE.Controllers.NegotiationTab || {}));
 });

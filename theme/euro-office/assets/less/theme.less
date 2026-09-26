@@ -34,7 +34,12 @@
 // packages/app/src/providers/theme/themes.ts). Used by overrides/colors.less to repaint the
 // document editor's header bar, which upstream ships as ONLYOFFICE's Word blue (#446995).
 @tl-secondary: #3DBD7D;
-@tl-header-document: @tl-secondary;
+// The header is NOT the brand green. The dealroom frames this editor in its own #5678A4 header
+// band and repaints our header to match via the ribbon descriptor — but that only arrives once
+// the app has booted, so a green header here showed as a green flash on every load and bled
+// through wherever the descriptor CSS did not reach (the tab-strip scroll fades). Shipping the
+// dealroom colour as the image default removes both, and leaves the descriptor as a no-op.
+@tl-header-document: #5678A4;
 
 // ==========================================================================
 // Load CSS Overrides
