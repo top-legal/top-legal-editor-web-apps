@@ -294,6 +294,7 @@ define([
                 }
                 var slot = me._panels[tabSpec.id];
                 if (slot) me._renderControls(slot.$controls, tabSpec.controls || []);
+                me._syncTabCaption(tabSpec.id, tabSpec.label);
             });
 
             // Tabs the descriptor no longer names keep their place but show the empty state, so a
@@ -302,6 +303,19 @@ define([
                 var stillNamed = tabs.some(function (tabSpec) { return tabSpec.id === id; });
                 if (!stillNamed) me._renderControls(me._panels[id].$controls, []);
             });
+        },
+
+        /**
+         * Keep a tab's caption in step with the descriptor. The primary tab is built by Toolbar.js
+         * with the literal caption 'Negotiation' before any descriptor exists, and extra tabs keep
+         * the label they were created with — so without this the primary tab was never translated.
+         * textContent (via .text), never markup: labels are host-supplied.
+         */
+        _syncTabCaption: function (id, label) {
+            if (typeof label !== 'string' || !label) return;
+            var $a = $('.toolbar .tabs a[data-tab="' + id + '"]');
+            if (!$a.length || $a.text() === label) return;
+            $a.text(label).attr('data-title', label);
         },
 
         /** One branch per widget type. Adding a TYPE here is the only change that needs a rebuild. */
