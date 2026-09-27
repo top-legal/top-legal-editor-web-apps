@@ -29,6 +29,30 @@ define([], function () {
     if (window.DE && window.DE.Views && window.DE.Views.DocumentHolder) {
         let dh = window.DE.Views.DocumentHolder.prototype;
 
+        // top.legal: one host-declared context-menu entry ("Add task"), placed under "Add comment".
+        // Label, id and whether it exists at all come from the dealroom's ribbon descriptor
+        // (`contextMenu`, see NegotiationTab.js), so a host that declares nothing sees no change.
+        dh.createTlHostMenuItem = function() {
+            // Non-empty placeholder: setCaption rewrites the anchor's last text node, which must exist.
+            var item = new Common.UI.MenuItem({ caption: ' ' });
+            item.setVisible(false);
+            item.on('click', function() {
+                var tab = window.DE.getController && window.DE.getController('NegotiationTab');
+                tab && tab.contextMenuAction && tab.contextMenuAction(item.options.value);
+            });
+            return item;
+        };
+
+        dh.syncTlHostMenuItem = function(item) {
+            var tab = window.DE.getController && window.DE.getController('NegotiationTab'),
+                spec = tab && tab.contextMenuItem ? tab.contextMenuItem() : null;
+            item.setVisible(!!spec);
+            if (!spec) return false;
+            item.options.value = spec.id;
+            item.setCaption(spec.label);
+            return true;
+        };
+
         dh.createDelayedElements = function() {
             var me = this;
 
@@ -1306,6 +1330,7 @@ define([], function () {
                 iconCls: 'menu__icon btn-add-comment',
                 caption     : me.addCommentText
             });
+            me.menuTlHostTable = me.createTlHostMenuItem();
             /** coauthoring end **/
 
             me.menuAddHyperlinkTable = new Common.UI.MenuItem({
@@ -1835,6 +1860,7 @@ define([], function () {
                     // comments
                     me.menuAddCommentTable.setVisible(me.api.can_AddQuotedComment()!==false && me.mode.canCoAuthoring && me.mode.canComments && !control_lock);
                     me.menuAddCommentTable.setDisabled(value.paraProps!==undefined && value.paraProps.locked===true);
+                    me.syncTlHostMenuItem(me.menuTlHostTable);
                     /** coauthoring end **/
 
                     var in_field = me.api.asc_HaveFields(true);
@@ -1882,6 +1908,7 @@ define([], function () {
                     /** coauthoring begin **/
                     me.menuAddCommentTable,
                     /** coauthoring end **/
+                    me.menuTlHostTable,
                     menuNumberingTable,
                     me.menuAddHyperlinkTable,
                     menuHyperlinkTable,
@@ -2058,6 +2085,7 @@ define([], function () {
                 iconCls: 'menu__icon btn-add-comment',
                 caption     : me.addCommentText
             });
+            me.menuTlHostPara = me.createTlHostMenuItem();
             /** coauthoring end **/
 
             var menuHyperlinkParaSeparator = new Common.UI.MenuItem({
@@ -2500,6 +2528,8 @@ define([], function () {
                     me.menuAddCommentPara.setVisible(isVisible);
                     me.menuAddCommentPara.setDisabled(value.paraProps && value.paraProps.locked === true);
                     /** coauthoring end **/
+                    // Keep the separator when the task entry is the only thing below it.
+                    if (me.syncTlHostMenuItem(me.menuTlHostPara)) menuCommentSeparatorPara.setVisible(true);
 
                     // Nextcloud Assistant entry — show only when the host has
                     // announced the Assistant app is available AND the
@@ -2582,6 +2612,7 @@ define([], function () {
                     menuCommentSeparatorPara,
                     me.menuAddCommentPara,
                     /** coauthoring end **/
+                    me.menuTlHostPara,
                     menuHyperlinkParaSeparator,
                     me.menuAddHyperlinkPara,
                     menuHyperlinkPara,
@@ -2702,6 +2733,7 @@ define([], function () {
                 iconCls: 'menu__icon btn-add-comment',
                 caption: me.addCommentText
             });
+            me.menuViewTlHost = me.createTlHostMenuItem();
 
             me.menuSignatureViewSign   = new Common.UI.MenuItem({caption: this.strSign,      value: 0 });
             me.menuSignatureDetails    = new Common.UI.MenuItem({caption: this.strDetails,   value: 1 });
@@ -2758,6 +2790,7 @@ define([], function () {
 
                     me.menuViewAddComment.setVisible(canComment);
                     me.menuViewAddComment.setDisabled(value.paraProps && value.paraProps.locked === true || me._docProtection.isReadOnly || me._docProtection.isFormsOnly);
+                    if (me.syncTlHostMenuItem(me.menuViewTlHost)) me.menuViewSignSeparator.setVisible(true);
 
                     var disabled = value.paraProps && value.paraProps.locked === true;
                     var cancopy = me.api && me.api.can_CopyCut();
@@ -2782,7 +2815,8 @@ define([], function () {
                     me.menuSignatureViewSetup,
                     me.menuSignatureRemove,
                     me.menuViewSignSeparator,
-                    me.menuViewAddComment
+                    me.menuViewAddComment,
+                    me.menuViewTlHost
                 ]
             }).on('hide:after', function (menu, e, isFromInputControl) {
                 me.clearCustomItems(menu);

@@ -31,6 +31,10 @@
  *   tab  -> app : { __tl:'tl-office-ribbon', type:'ready' }
  *   tab  -> app : { __tl:'tl-office-ribbon', type:'action', id, value? }
  *
+ * CONTEXT MENU. `contextMenu: [{id, label}]` (optional, additive — no version bump) declares an
+ * entry for the right-click menu, shown under "Add comment". Only the first entry is used. A click
+ * is reported as an ordinary `action` with that id, so the host handles it like a ribbon button.
+ *
  * ANCHORS (same channel, `anchors:*` types) — text ranges the host can attach things to, used for
  * tasks. See the "Anchors" section below for the messages and why they are built this way.
  *
@@ -113,6 +117,17 @@ define([
             } catch (e) { p = null; }
             this._parentOrigin = p || null;
             return this._parentOrigin;
+        },
+
+        contextMenuItem: function () {
+            var list = this.descriptor && this.descriptor.contextMenu;
+            var c = Array.isArray(list) ? list[0] : null;
+            if (!c || typeof c.id !== 'string' || typeof c.label !== 'string' || !c.label) return null;
+            return { id: c.id, label: c.label };
+        },
+
+        contextMenuAction: function (id) {
+            if (typeof id === 'string' && id) this._post({ type: 'action', id: id });
         },
 
         _post: function (msg) {
