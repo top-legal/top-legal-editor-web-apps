@@ -163,6 +163,8 @@ require([
             // It renders nothing and is only reached over postMessage, so nothing depends on
             // it having launched, which is exactly what makes last the correct position.
             ,'DocumentEdits'
+            // top.legal: Word template fields over postMessage. Same reasoning as DocumentEdits.
+            ,'ContentControls'
         ]
     });
 
@@ -199,6 +201,7 @@ require([
                 'common/main/lib/controller/History'
                 /** coauthoring begin **/
                 ,'documenteditor/main/app/controller/DocumentEdits'
+                ,'documenteditor/main/app/controller/ContentControls'
                 ,'common/main/lib/controller/Comments'
                 ,'common/main/lib/controller/Chat'
                 /** coauthoring end **/
