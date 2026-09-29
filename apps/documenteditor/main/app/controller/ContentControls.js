@@ -17,6 +17,11 @@
  * registration sits LAST in app.js. Failing alone is always the correct outcome: the host's panel
  * simply never sees 'ready' and says the editor cannot link fields.
  *
+ * FILL is the exception to one-call-per-operation: drafting sets many fields at once, so it works on
+ * the document model inside ONE action (one lock check over every affected paragraph, one undo
+ * step, one co-editing change) instead of calling asc_SetContentControlText per control — which is
+ * exactly the pattern the spike showed silently dropping all but the first.
+ *
  * ONE OPERATION PER MESSAGE. Measured in the co-editing spike: several asc_* content-control calls
  * in the same tick silently drop all but the first (the co-editing lock check is asynchronous). The
  * host sends user actions, which are naturally seconds apart, and never batches them.
@@ -28,6 +33,8 @@
  *   app    -> editor : { __tl:'tl-office-fields', type:'select',  requestId, id }
  *   app    -> editor : { __tl:'tl-office-fields', type:'unlink',  requestId, id }
  *   app    -> editor : { __tl:'tl-office-fields', type:'selection', requestId }
+ *   app    -> editor : { __tl:'tl-office-fields', type:'fill', requestId, values:{ <fieldID>: <text> } }
+ *   app    -> editor : { __tl:'tl-office-fields', type:'applyConditions', requestId, answers:{ <fieldID>: [<optionKey>] } }
  *   editor -> app    : { __tl:'tl-office-fields', type:'ready', version, canEdit }
  *   editor -> app    : { __tl:'tl-office-fields', type:'result', requestId, ok, reason?, id?, text?, controls? }
  *
@@ -159,6 +166,8 @@ define([
                 case 'insert': me._result(requestId, me._insert(d)); return;
                 case 'select': me._result(requestId, me._select(d.id)); return;
                 case 'unlink': me._result(requestId, me._unlink(d.id)); return;
+                case 'fill': me._result(requestId, me._fill(d.values)); return;
+                case 'applyConditions': me._result(requestId, me._applyConditions(d.answers)); return;
                 default: me._result(requestId, { ok: false, reason: 'unsupported' });
             }
         },
@@ -266,6 +275,86 @@ define([
             try {
                 this.api.asc_RemoveContentControlWrapper(cc.GetId());
                 return { ok: !this._findOwn(id), reason: this._findOwn(id) ? 'locked' : undefined };
+            } catch (e) {
+                return { ok: false, reason: 'error' };
+            }
+        },
+
+        /**
+         * Put field values into every `tl:f:<fieldID>` control. Unchanged text is skipped, so a
+         * host that re-sends the whole answer set on every keystroke produces no churn. An empty
+         * value leaves the control as it is (the template's own text stays as the placeholder).
+         */
+        _fill: function (values) {
+            if (!this._canEdit()) return { ok: false, reason: 'readOnly' };
+            if (!values || typeof values !== 'object') return { ok: false, reason: 'badValues' };
+            var doc = this._doc();
+            var todo = [];
+            this._ownControls().forEach(function (cc) {
+                var tag = cc.GetTag();
+                if (tag.indexOf('tl:f:') !== 0 || typeof cc.IsInlineLevel !== 'function' || !cc.IsInlineLevel()) return;
+                var v = values[tag.slice(5)];
+                if (typeof v !== 'string' || !v) return;
+                var current = '';
+                try { current = String(cc.GetInnerText()); } catch (e) { current = ''; }
+                if (current !== v) todo.push({ cc: cc, text: v.slice(0, 5000) });
+            });
+            if (!todo.length) return { ok: true, filled: 0 };
+            try {
+                var paragraphs = todo.map(function (x) { return x.cc.GetParagraph(); }).filter(Boolean);
+                var locked = doc.Document_Is_SelectionLocked(AscCommon.changestype_None, {
+                    Type: AscCommon.changestype_2_ElementsArray_and_Type,
+                    Elements: paragraphs,
+                    CheckType: AscCommon.changestype_Paragraph_Content,
+                });
+                if (locked) return { ok: false, reason: 'locked' };
+                doc.StartAction(AscDFH.historydescription_Document_SetContentControlText);
+                todo.forEach(function (x) {
+                    if (x.cc.IsPlaceHolder && x.cc.IsPlaceHolder()) x.cc.ReplacePlaceHolderWithContent();
+                    var run = x.cc.MakeSingleRunElement(true);
+                    if (run) run.AddText(x.text);
+                });
+                doc.Recalculate();
+                doc.UpdateInterface();
+                doc.FinalizeAction();
+                return { ok: true, filled: todo.length };
+            } catch (e) {
+                return { ok: false, reason: 'error' };
+            }
+        },
+
+        /**
+         * Finish-drafting step for conditions: a `tl:c:<fieldID>=<optionKey>` block whose option is
+         * not among the answer's keys is deleted with its content; one whose option was chosen is
+         * kept. Fields with no answer at all are left untouched, so an unanswered question never
+         * silently deletes a clause.
+         */
+        _applyConditions: function (answers) {
+            if (!this._canEdit()) return { ok: false, reason: 'readOnly' };
+            if (!answers || typeof answers !== 'object') return { ok: false, reason: 'badAnswers' };
+            var doc = this._doc();
+            var drop = [];
+            this._ownControls().forEach(function (cc) {
+                var m = /^tl:c:([^=]+)=(.+)$/.exec(cc.GetTag());
+                if (!m) return;
+                var chosen = answers[m[1]];
+                if (!_.isArray(chosen)) return;
+                if (chosen.indexOf(m[2]) === -1) drop.push(cc);
+            });
+            if (!drop.length) return { ok: true, removed: 0 };
+            try {
+                var locked = doc.Document_Is_SelectionLocked(AscCommon.changestype_None, {
+                    Type: AscCommon.changestype_2_ElementsArray_and_Type,
+                    Elements: drop.map(function (cc) { return cc.IsBlockLevel() ? cc : cc.GetParagraph(); }).filter(Boolean),
+                    CheckType: AscCommon.changestype_ContentControl_Remove,
+                });
+                if (locked) return { ok: false, reason: 'locked' };
+                doc.StartAction(AscDFH.historydescription_Document_RemoveContentControl);
+                drop.forEach(function (cc) { doc.RemoveContentControl(cc.GetId()); });
+                doc.Recalculate();
+                doc.UpdateInterface();
+                doc.FinalizeAction();
+                return { ok: true, removed: drop.length };
             } catch (e) {
                 return { ok: false, reason: 'error' };
             }
