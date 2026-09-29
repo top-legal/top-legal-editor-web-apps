@@ -33,7 +33,10 @@
  *   app    -> editor : { __tl:'tl-office-fields', type:'select',  requestId, id }
  *   app    -> editor : { __tl:'tl-office-fields', type:'unlink',  requestId, id }
  *   app    -> editor : { __tl:'tl-office-fields', type:'selection', requestId }
- *   app    -> editor : { __tl:'tl-office-fields', type:'fill', requestId, values:{ <fieldID>: <text> } }
+ *   app    -> editor : { __tl:'tl-office-fields', type:'fill', requestId, values:{ <fieldKey>: <text> | { text, list } } }
+ *                       An inline control takes `text` (or `lines`, joined by line breaks); a BLOCK control given a `list` becomes one
+ *                       bullet paragraph per entry (a multiple-choice answer), styled like the
+ *                       template's first paragraph in that block.
  *   app    -> editor : { __tl:'tl-office-fields', type:'applyConditions', requestId, answers:{ <fieldID>: [<optionKey>] } }
  *   editor -> app    : { __tl:'tl-office-fields', type:'ready', version, canEdit }
  *   editor -> app    : { __tl:'tl-office-fields', type:'result', requestId, ok, reason?, id?, text?, controls? }
@@ -52,7 +55,9 @@ define([
     var TAG_PREFIX = 'tl:';
     // Tags reach the file and the host; anything outside this shape is refused rather than
     // sanitised. Field ids and option keys are uuid/uniqid-like.
-    var TAG_RE = /^tl:(f:[A-Za-z0-9_-]{1,100}|c:[A-Za-z0-9_-]{1,100}=[A-Za-z0-9_ .-]{1,100})$/;
+    // A field key may name a PART of a structured field (`__my_company.name`,
+    // `<fieldID>.full_address.city`), hence the dot.
+    var TAG_RE = /^tl:(f:[A-Za-z0-9_.-]{1,160}|c:[A-Za-z0-9_.-]{1,160}=[A-Za-z0-9_ .-]{1,100})$/;
     var MAX_ALIAS = 120;
     // Text preview per control in a list — enough for the panel, never the whole clause.
     var MAX_TEXT = 200;
@@ -292,28 +297,58 @@ define([
             var todo = [];
             this._ownControls().forEach(function (cc) {
                 var tag = cc.GetTag();
-                if (tag.indexOf('tl:f:') !== 0 || typeof cc.IsInlineLevel !== 'function' || !cc.IsInlineLevel()) return;
+                if (tag.indexOf('tl:f:') !== 0) return;
                 var v = values[tag.slice(5)];
-                if (typeof v !== 'string' || !v) return;
+                var text = typeof v === 'string' ? v : (v && typeof v.text === 'string' ? v.text : '');
+                var list = v && _.isArray(v.list) ? v.list.filter(function (x) { return typeof x === 'string' && x; }) : null;
+                // `lines`: an address block and the like — line breaks INSIDE the field's paragraph.
+                var lines = v && _.isArray(v.lines) ? v.lines.filter(function (x) { return typeof x === 'string' && x; }) : null;
+                var isBlock = typeof cc.IsBlockLevel === 'function' && cc.IsBlockLevel();
+                if (isBlock && !list && text) list = [text];
+                if (isBlock ? !(list && list.length) : !text) return;
                 var current = '';
                 try { current = String(cc.GetInnerText()); } catch (e) { current = ''; }
-                if (current !== v) todo.push({ cc: cc, text: v.slice(0, 5000) });
+                if (isBlock) {
+                    // Compare item by item, ignoring the bullet glyphs and paragraph marks.
+                    var norm = current.split(/\r?\n/).map(function (l) { return l.replace(/^[^\t]*\t/, '').trim(); }).filter(Boolean).join('\n');
+                    if (norm === list.join('\n')) return;
+                    todo.push({ cc: cc, list: list.slice(0, 200).map(function (x) { return x.slice(0, 2000); }) });
+                } else if (lines && lines.length > 1) {
+                    if (current.replace(/\r/g, '') !== lines.join('\n')) todo.push({ cc: cc, lines: lines.slice(0, 50) });
+                } else if (current !== text) {
+                    todo.push({ cc: cc, text: text.slice(0, 5000) });
+                }
             });
             if (!todo.length) return { ok: true, filled: 0 };
             try {
-                var paragraphs = todo.map(function (x) { return x.cc.GetParagraph(); }).filter(Boolean);
+                var elements = todo.map(function (x) { return x.list ? x.cc : x.cc.GetParagraph(); }).filter(Boolean);
                 var locked = doc.Document_Is_SelectionLocked(AscCommon.changestype_None, {
                     Type: AscCommon.changestype_2_ElementsArray_and_Type,
-                    Elements: paragraphs,
+                    Elements: elements,
                     CheckType: AscCommon.changestype_Paragraph_Content,
                 });
                 if (locked) return { ok: false, reason: 'locked' };
                 doc.StartAction(AscDFH.historydescription_Document_SetContentControlText);
+                var bullet = null;
                 todo.forEach(function (x) {
+                    if (x.list) {
+                        if (!bullet) bullet = new AscBuilder.ApiDocument(doc).CreateNumbering('bullet').GetLevel(0);
+                        this._fillList(x.cc, x.list, bullet);
+                        return;
+                    }
                     if (x.cc.IsPlaceHolder && x.cc.IsPlaceHolder()) x.cc.ReplacePlaceHolderWithContent();
                     var run = x.cc.MakeSingleRunElement(true);
-                    if (run) run.AddText(x.text);
-                });
+                    if (!run) return;
+                    if (x.lines) {
+                        var apiRun = new AscBuilder.ApiRun(run);
+                        x.lines.forEach(function (line, i) {
+                            if (i) apiRun.AddLineBreak();
+                            apiRun.AddText(line.slice(0, 2000));
+                        });
+                        return;
+                    }
+                    run.AddText(x.text);
+                }, this);
                 doc.Recalculate();
                 doc.UpdateInterface();
                 doc.FinalizeAction();
@@ -321,6 +356,35 @@ define([
             } catch (e) {
                 return { ok: false, reason: 'error' };
             }
+        },
+
+        /**
+         * Replace a block control's paragraphs with one bullet paragraph per entry. Each copies the
+         * block's first paragraph (paragraph style + the formatting of its first run), so the list
+         * reads like the template text it replaces. Runs inside _fill's action.
+         */
+        _fillList: function (cc, items, bulletLevel) {
+            if (cc.IsPlaceHolder && cc.IsPlaceHolder()) cc.ReplacePlaceHolderWithContent();
+            var content = new AscBuilder.ApiBlockLvlSdt(cc).GetContent();
+            var proto = content.GetElement(0);
+            var paras = items.map(function (text) {
+                var p = proto.Copy();
+                for (var i = p.GetElementsCount() - 1; i > 0; i--) p.RemoveElement(i);
+                var run = p.GetElement(0);
+                if (run && typeof run.ClearContent === 'function') {
+                    run.ClearContent();
+                    run.AddText(text);
+                } else {
+                    p.AddText(text);
+                }
+                p.SetNumbering(bulletLevel);
+                return p;
+            });
+            content.RemoveAllElements();
+            paras.forEach(function (p) { content.Push(p); });
+            // RemoveAllElements leaves one empty paragraph behind (a document content is never
+            // empty); drop it now that the list is in.
+            if (content.GetElementsCount() > paras.length) content.RemoveElement(0);
         },
 
         /**
