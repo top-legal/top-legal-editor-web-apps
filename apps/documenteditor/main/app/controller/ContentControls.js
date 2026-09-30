@@ -9,6 +9,8 @@
  *   tl:f:<inputFieldID>              the text is replaced by the field's value when drafting
  *   tl:c:<inputFieldID>=<optionKey>  the wrapped text is kept only when that option is chosen
  *   tl:c:<inputFieldID>=<k1>|<k2>    ... when ANY of those options is chosen (AND = nest controls)
+ *   tl:t:<conditionalTextID>         the text is replaced by a playbook conditional text's output
+ *                                    (resolved by the host, nested conditions included)
  *
  * A condition may be inline (a phrase inside a sentence) or block (whole paragraphs / a clause).
  *
@@ -36,11 +38,15 @@
  *   app    -> editor : { __tl:'tl-office-fields', type:'select',  requestId, id }
  *   app    -> editor : { __tl:'tl-office-fields', type:'unlink',  requestId, id }
  *   app    -> editor : { __tl:'tl-office-fields', type:'selection', requestId }
- *   app    -> editor : { __tl:'tl-office-fields', type:'fill', requestId, values:{ <fieldKey>: <text> | { text, list } } }
+ *   app    -> editor : { __tl:'tl-office-fields', type:'colors', requestId, field:[r,g,b], text:[r,g,b], condition:[r,g,b] }
+ *                       Shading per kind (opaque: a docx keeps no alpha, so the host pre-blends). Applied to
+ *                       new controls and, when editable, once to existing ones whose shading differs.
+ *   app    -> editor : { __tl:'tl-office-fields', type:'fill', requestId, values:{ <fieldKey> | t:<conditionalTextID>: <text> | { text, lines, list, paras, clear } } }
  *                       An inline control takes `text` (or `lines`, joined by line breaks); a BLOCK control given a `list` becomes one
  *                       bullet paragraph per entry (a multiple-choice answer), styled like the
- *                       template's first paragraph in that block.
- *   app    -> editor : { __tl:'tl-office-fields', type:'applyConditions', requestId, answers:{ <fieldID>: [<optionKey>] } }
+ *                       template's first paragraph in that block. `paras` does the same without bullets (a
+ *                       conditional text's paragraphs); `clear` empties the control (its alias shows).
+ *   app    -> editor : { __tl:'tl-office-fields', type:'applyConditions', requestId, answers:{ <fieldID>: [<optionKey>] }, dropTags?:[<tag>] }
  *   editor -> app    : { __tl:'tl-office-fields', type:'ready', version, canEdit }
  *   editor -> app    : { __tl:'tl-office-fields', type:'result', requestId, ok, reason?, id?, text?, controls? }
  *
@@ -61,7 +67,7 @@ define([
     // A field key may name a PART of a structured field (`__my_company.name`,
     // `<fieldID>.full_address.city`), hence the dot.
     var OPTION_KEY = '[A-Za-z0-9_ .-]{1,100}';
-    var TAG_RE = new RegExp('^tl:(f:[A-Za-z0-9_.-]{1,160}|c:[A-Za-z0-9_.-]{1,160}=' + OPTION_KEY + '(\\|' + OPTION_KEY + '){0,19})$');
+    var TAG_RE = new RegExp('^tl:(f:[A-Za-z0-9_.-]{1,160}|c:[A-Za-z0-9_.-]{1,160}=' + OPTION_KEY + '(\\|' + OPTION_KEY + '){0,19}|t:[A-Za-z0-9_.-]{1,160})$');
     var MAX_ALIAS = 120;
     // Text preview per control in a list — enough for the panel, never the whole clause.
     var MAX_TEXT = 200;
@@ -69,6 +75,8 @@ define([
     var HIGHLIGHT = [255, 236, 179];
     // Frame colour of a condition (shown on hover/focus), so it reads apart from a field.
     var CONDITION_COLOR = [230, 81, 0];
+    // Tag prefix -> key of the host's `colors` message.
+    var KINDS = { 'tl:f:': 'field', 'tl:t:': 'text', 'tl:c:': 'condition' };
 
     DE.Controllers.ContentControls = Backbone.Controller.extend(_.extend({
         models: [],
@@ -177,8 +185,9 @@ define([
                 case 'insert': me._result(requestId, me._insert(d)); return;
                 case 'select': me._result(requestId, me._select(d.id)); return;
                 case 'unlink': me._result(requestId, me._unlink(d.id)); return;
+                case 'colors': me._result(requestId, me._setColors(d)); return;
                 case 'fill': me._result(requestId, me._fill(d.values)); return;
-                case 'applyConditions': me._result(requestId, me._applyConditions(d.answers)); return;
+                case 'applyConditions': me._result(requestId, me._applyConditions(d.answers, d.dropTags)); return;
                 default: me._result(requestId, { ok: false, reason: 'unsupported' });
             }
         },
@@ -198,6 +207,60 @@ define([
                 this.api.asc_SetGlobalContentControlShowHighlight(true, HIGHLIGHT[0], HIGHLIGHT[1], HIGHLIGHT[2]);
                 this._highlighted = true;
             } catch (e) { /* cosmetic */ }
+        },
+
+        _kindOf: function (tag) {
+            var prefix = typeof tag === 'string' ? tag.slice(0, 5) : '';
+            return KINDS[prefix] || null;
+        },
+
+        /** The host's [r,g,b] for this tag's kind, validated; null = keep the editor default. */
+        _colorFor: function (tag) {
+            var kind = this._kindOf(tag);
+            var c = kind && this._colors ? this._colors[kind] : null;
+            if (!_.isArray(c) || c.length < 3) return null;
+            for (var i = 0; i < 3; i++) if (typeof c[i] !== 'number' || c[i] < 0 || c[i] > 255) return null;
+            return [c[0] | 0, c[1] | 0, c[2] | 0];
+        },
+
+        /**
+         * Store the host's shading per kind and bring existing controls in line, in ONE action. Only
+         * controls whose shading differs are touched, so a template opened a second time is unchanged.
+         */
+        _setColors: function (d) {
+            var me = this;
+            me._colors = { field: d.field, text: d.text, condition: d.condition };
+            if (!me._canEdit()) return { ok: true, recolored: 0 };
+            var doc = me._doc();
+            var todo = [];
+            me._ownControls().forEach(function (cc) {
+                var c = me._colorFor(cc.GetTag());
+                if (!c || typeof cc.setShdColor !== 'function') return;
+                var cur = cc.getShdColor && cc.getShdColor();
+                if (cur && cur.r === c[0] && cur.g === c[1] && cur.b === c[2] && cur.a === 255) return;
+                todo.push({ cc: cc, color: c });
+            });
+            if (!todo.length) return { ok: true, recolored: 0 };
+            try {
+                var locked = doc.Document_Is_SelectionLocked(AscCommon.changestype_None, {
+                    Type: AscCommon.changestype_2_ElementsArray_and_Type,
+                    Elements: todo.map(function (x) { return x.cc.IsBlockLevel() ? x.cc : x.cc.GetParagraph(); }).filter(Boolean),
+                    CheckType: AscCommon.changestype_Paragraph_Content,
+                });
+                // Cosmetic: a co-editor holding the text just means the old colour stays for now.
+                if (locked) return { ok: true, recolored: 0 };
+                doc.StartAction(AscDFH.historydescription_Document_SetContentControlText);
+                todo.forEach(function (x) {
+                    x.cc.setShdColor(new AscWord.CDocumentColorA(x.color[0], x.color[1], x.color[2], 255));
+                    if (typeof x.cc.SetColor === 'function') x.cc.SetColor(new AscWord.CDocumentColor(x.color[0], x.color[1], x.color[2]));
+                });
+                doc.Recalculate();
+                doc.UpdateInterface();
+                doc.FinalizeAction();
+                return { ok: true, recolored: todo.length };
+            } catch (e) {
+                return { ok: true, recolored: 0 };
+            }
         },
 
         _ownControls: function () {
@@ -250,7 +313,12 @@ define([
                 pr.put_Alias(alias);
                 pr.put_Appearance(Asc.c_oAscSdtAppearance ? Asc.c_oAscSdtAppearance.Frame : 1);
                 if (alias && typeof pr.put_PlaceholderText === 'function') pr.put_PlaceholderText(alias);
-                if (tag.indexOf('tl:c:') === 0 && typeof pr.put_Color === 'function') {
+                var shade = this._colorFor(tag);
+                if (shade) {
+                    // Applied by SetContentControlPr on creation; opaque, so it survives the docx.
+                    pr.ShdColor = { r: shade[0], g: shade[1], b: shade[2], a: 255 };
+                    if (typeof pr.put_Color === 'function') pr.put_Color(shade[0], shade[1], shade[2]);
+                } else if (tag.indexOf('tl:c:') === 0 && typeof pr.put_Color === 'function') {
                     pr.put_Color(CONDITION_COLOR[0], CONDITION_COLOR[1], CONDITION_COLOR[2]);
                 }
                 var type = d.block ? Asc.c_oAscSdtLevelType.Block : Asc.c_oAscSdtLevelType.Inline;
@@ -306,17 +374,34 @@ define([
             var todo = [];
             this._ownControls().forEach(function (cc) {
                 var tag = cc.GetTag();
-                if (tag.indexOf('tl:f:') !== 0) return;
-                var v = values[tag.slice(5)];
+                var key;
+                if (tag.indexOf('tl:f:') === 0) key = tag.slice(5);
+                else if (tag.indexOf('tl:t:') === 0) key = 't:' + tag.slice(5);
+                else return;
+                var v = values[key];
+                var isBlock = typeof cc.IsBlockLevel === 'function' && cc.IsBlockLevel();
+                var current = '';
+                try { current = String(cc.GetInnerText()); } catch (e) { current = ''; }
+                if (v && v.clear === true) {
+                    // Decided, and nothing to show: empty the control (its alias placeholder shows).
+                    if (!(cc.IsPlaceHolder && cc.IsPlaceHolder()) && current.replace(/[\r\n\s]/g, '')) todo.push({ cc: cc, clear: true, block: isBlock });
+                    return;
+                }
                 var text = typeof v === 'string' ? v : (v && typeof v.text === 'string' ? v.text : '');
+                // `paras`: plain paragraphs in a block control (a conditional text), no bullets.
+                var paras = isBlock && v && _.isArray(v.paras) ? v.paras.filter(function (x) { return typeof x === 'string'; }) : null;
+                if (paras && paras.length) {
+                    var normP = current.split(/\r?\n/).map(function (l) { return l.trim(); }).join('\n').replace(/\n+$/, '');
+                    if (normP !== paras.map(function (x) { return x.trim(); }).join('\n')) {
+                        todo.push({ cc: cc, list: paras.slice(0, 200).map(function (x) { return x.slice(0, 5000); }), plain: true });
+                    }
+                    return;
+                }
                 var list = v && _.isArray(v.list) ? v.list.filter(function (x) { return typeof x === 'string' && x; }) : null;
                 // `lines`: an address block and the like — line breaks INSIDE the field's paragraph.
                 var lines = v && _.isArray(v.lines) ? v.lines.filter(function (x) { return typeof x === 'string' && x; }) : null;
-                var isBlock = typeof cc.IsBlockLevel === 'function' && cc.IsBlockLevel();
                 if (isBlock && !list && text) list = [text];
                 if (isBlock ? !(list && list.length) : !text) return;
-                var current = '';
-                try { current = String(cc.GetInnerText()); } catch (e) { current = ''; }
                 if (isBlock) {
                     // Compare item by item, ignoring the bullet glyphs and paragraph marks.
                     var norm = current.split(/\r?\n/).map(function (l) { return l.replace(/^[^\t]*\t/, '').trim(); }).filter(Boolean).join('\n');
@@ -330,7 +415,7 @@ define([
             });
             if (!todo.length) return { ok: true, filled: 0 };
             try {
-                var elements = todo.map(function (x) { return x.list ? x.cc : x.cc.GetParagraph(); }).filter(Boolean);
+                var elements = todo.map(function (x) { return x.list || (x.clear && x.block) ? x.cc : x.cc.GetParagraph(); }).filter(Boolean);
                 var locked = doc.Document_Is_SelectionLocked(AscCommon.changestype_None, {
                     Type: AscCommon.changestype_2_ElementsArray_and_Type,
                     Elements: elements,
@@ -340,9 +425,14 @@ define([
                 doc.StartAction(AscDFH.historydescription_Document_SetContentControlText);
                 var bullet = null;
                 todo.forEach(function (x) {
+                    if (x.clear) {
+                        if (x.block) new AscBuilder.ApiBlockLvlSdt(x.cc).GetContent().RemoveAllElements();
+                        else x.cc.MakeSingleRunElement(true);
+                        return;
+                    }
                     if (x.list) {
-                        if (!bullet) bullet = new AscBuilder.ApiDocument(doc).CreateNumbering('bullet').GetLevel(0);
-                        this._fillList(x.cc, x.list, bullet);
+                        if (!x.plain && !bullet) bullet = new AscBuilder.ApiDocument(doc).CreateNumbering('bullet').GetLevel(0);
+                        this._fillList(x.cc, x.list, x.plain ? null : bullet);
                         return;
                     }
                     if (x.cc.IsPlaceHolder && x.cc.IsPlaceHolder()) x.cc.ReplacePlaceHolderWithContent();
@@ -368,7 +458,8 @@ define([
         },
 
         /**
-         * Replace a block control's paragraphs with one bullet paragraph per entry. Each copies the
+         * Replace a block control's paragraphs with one bullet paragraph per entry (or plain
+         * paragraphs when `bulletLevel` is null). Each copies the
          * block's first paragraph (paragraph style + the formatting of its first run), so the list
          * reads like the template text it replaces. Runs inside _fill's action.
          */
@@ -386,7 +477,7 @@ define([
                 } else {
                     p.AddText(text);
                 }
-                p.SetNumbering(bulletLevel);
+                if (bulletLevel) p.SetNumbering(bulletLevel);
                 return p;
             });
             content.RemoveAllElements();
@@ -403,12 +494,16 @@ define([
          * silently deletes a clause. Nested conditions: an inner control inside a dropped outer one
          * goes with it (skipped here, its id no longer resolves).
          */
-        _applyConditions: function (answers) {
+        _applyConditions: function (answers, dropTags) {
             if (!this._canEdit()) return { ok: false, reason: 'readOnly' };
             if (!answers || typeof answers !== 'object') return { ok: false, reason: 'badAnswers' };
             var doc = this._doc();
             var drop = [];
+            // Tags the host resolved to nothing (a conditional text with no text for the answer).
+            var dropSet = {};
+            if (_.isArray(dropTags)) dropTags.forEach(function (t) { if (typeof t === 'string' && TAG_RE.test(t)) dropSet[t] = true; });
             this._ownControls().forEach(function (cc) {
+                if (dropSet[cc.GetTag()]) { drop.push(cc); return; }
                 var m = /^tl:c:([^=]+)=(.+)$/.exec(cc.GetTag());
                 if (!m) return;
                 var chosen = answers[m[1]];
