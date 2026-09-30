@@ -29,12 +29,14 @@ define([], function () {
     if (window.DE && window.DE.Views && window.DE.Views.DocumentHolder) {
         let dh = window.DE.Views.DocumentHolder.prototype;
 
-        // top.legal: one host-declared context-menu entry ("Add task"), placed under "Add comment".
+        // top.legal: up to two host-declared context-menu entries ("Add task", or a Word template's
+        // "Link input field" / "Make conditional"), placed under "Add comment".
         // Label, id and whether it exists at all come from the dealroom's ribbon descriptor
         // (`contextMenu`, see NegotiationTab.js), so a host that declares nothing sees no change.
-        dh.createTlHostMenuItem = function() {
+        dh.createTlHostMenuItem = function(index) {
             // Non-empty placeholder: setCaption rewrites the anchor's last text node, which must exist.
             var item = new Common.UI.MenuItem({ caption: ' ' });
+            item.tlIndex = index || 0;
             item.setVisible(false);
             item.on('click', function() {
                 var tab = window.DE.getController && window.DE.getController('NegotiationTab');
@@ -45,7 +47,7 @@ define([], function () {
 
         dh.syncTlHostMenuItem = function(item) {
             var tab = window.DE.getController && window.DE.getController('NegotiationTab'),
-                spec = tab && tab.contextMenuItem ? tab.contextMenuItem() : null;
+                spec = tab && tab.contextMenuItem ? tab.contextMenuItem(item.tlIndex) : null;
             item.setVisible(!!spec);
             if (!spec) return false;
             item.options.value = spec.id;
@@ -1330,7 +1332,8 @@ define([], function () {
                 iconCls: 'menu__icon btn-add-comment',
                 caption     : me.addCommentText
             });
-            me.menuTlHostTable = me.createTlHostMenuItem();
+            me.menuTlHostTable = me.createTlHostMenuItem(0);
+            me.menuTlHostTable2 = me.createTlHostMenuItem(1);
             /** coauthoring end **/
 
             me.menuAddHyperlinkTable = new Common.UI.MenuItem({
@@ -1861,6 +1864,7 @@ define([], function () {
                     me.menuAddCommentTable.setVisible(me.api.can_AddQuotedComment()!==false && me.mode.canCoAuthoring && me.mode.canComments && !control_lock);
                     me.menuAddCommentTable.setDisabled(value.paraProps!==undefined && value.paraProps.locked===true);
                     me.syncTlHostMenuItem(me.menuTlHostTable);
+                    me.syncTlHostMenuItem(me.menuTlHostTable2);
                     /** coauthoring end **/
 
                     var in_field = me.api.asc_HaveFields(true);
@@ -1909,6 +1913,7 @@ define([], function () {
                     me.menuAddCommentTable,
                     /** coauthoring end **/
                     me.menuTlHostTable,
+                    me.menuTlHostTable2,
                     menuNumberingTable,
                     me.menuAddHyperlinkTable,
                     menuHyperlinkTable,
@@ -2085,7 +2090,8 @@ define([], function () {
                 iconCls: 'menu__icon btn-add-comment',
                 caption     : me.addCommentText
             });
-            me.menuTlHostPara = me.createTlHostMenuItem();
+            me.menuTlHostPara = me.createTlHostMenuItem(0);
+            me.menuTlHostPara2 = me.createTlHostMenuItem(1);
             /** coauthoring end **/
 
             var menuHyperlinkParaSeparator = new Common.UI.MenuItem({
@@ -2530,6 +2536,7 @@ define([], function () {
                     /** coauthoring end **/
                     // Keep the separator when the task entry is the only thing below it.
                     if (me.syncTlHostMenuItem(me.menuTlHostPara)) menuCommentSeparatorPara.setVisible(true);
+                    me.syncTlHostMenuItem(me.menuTlHostPara2);
 
                     // Nextcloud Assistant entry — show only when the host has
                     // announced the Assistant app is available AND the
@@ -2613,6 +2620,7 @@ define([], function () {
                     me.menuAddCommentPara,
                     /** coauthoring end **/
                     me.menuTlHostPara,
+                    me.menuTlHostPara2,
                     menuHyperlinkParaSeparator,
                     me.menuAddHyperlinkPara,
                     menuHyperlinkPara,

@@ -7,7 +7,10 @@
  * so the host keeps no separate mapping.
  *
  *   tl:f:<inputFieldID>              the text is replaced by the field's value when drafting
- *   tl:c:<inputFieldID>=<optionKey>  the wrapped block is kept only when that option is chosen
+ *   tl:c:<inputFieldID>=<optionKey>  the wrapped text is kept only when that option is chosen
+ *   tl:c:<inputFieldID>=<k1>|<k2>    ... when ANY of those options is chosen (AND = nest controls)
+ *
+ * A condition may be inline (a phrase inside a sentence) or block (whole paragraphs / a clause).
  *
  * This controller knows nothing about fields, playbooks or drafting. It wraps, lists, selects and
  * unwraps controls whose tag starts with `tl:`, and reports precisely what happened.
@@ -57,12 +60,15 @@ define([
     // sanitised. Field ids and option keys are uuid/uniqid-like.
     // A field key may name a PART of a structured field (`__my_company.name`,
     // `<fieldID>.full_address.city`), hence the dot.
-    var TAG_RE = /^tl:(f:[A-Za-z0-9_.-]{1,160}|c:[A-Za-z0-9_.-]{1,160}=[A-Za-z0-9_ .-]{1,100})$/;
+    var OPTION_KEY = '[A-Za-z0-9_ .-]{1,100}';
+    var TAG_RE = new RegExp('^tl:(f:[A-Za-z0-9_.-]{1,160}|c:[A-Za-z0-9_.-]{1,160}=' + OPTION_KEY + '(\\|' + OPTION_KEY + '){0,19})$');
     var MAX_ALIAS = 120;
     // Text preview per control in a list — enough for the panel, never the whole clause.
     var MAX_TEXT = 200;
     // Shading so linked text is visible at rest, not only when the cursor is inside it.
     var HIGHLIGHT = [255, 236, 179];
+    // Frame colour of a condition (shown on hover/focus), so it reads apart from a field.
+    var CONDITION_COLOR = [230, 81, 0];
 
     DE.Controllers.ContentControls = Backbone.Controller.extend(_.extend({
         models: [],
@@ -244,6 +250,9 @@ define([
                 pr.put_Alias(alias);
                 pr.put_Appearance(Asc.c_oAscSdtAppearance ? Asc.c_oAscSdtAppearance.Frame : 1);
                 if (alias && typeof pr.put_PlaceholderText === 'function') pr.put_PlaceholderText(alias);
+                if (tag.indexOf('tl:c:') === 0 && typeof pr.put_Color === 'function') {
+                    pr.put_Color(CONDITION_COLOR[0], CONDITION_COLOR[1], CONDITION_COLOR[2]);
+                }
                 var type = d.block ? Asc.c_oAscSdtLevelType.Block : Asc.c_oAscSdtLevelType.Inline;
                 var created = this.api.asc_AddContentControl(type, pr);
                 // null = the selection was locked by a co-editor, or could not take a control
@@ -388,10 +397,11 @@ define([
         },
 
         /**
-         * Finish-drafting step for conditions: a `tl:c:<fieldID>=<optionKey>` block whose option is
-         * not among the answer's keys is deleted with its content; one whose option was chosen is
+         * Finish-drafting step for conditions: a `tl:c:<fieldID>=<k1>|<k2>` control none of whose
+         * options is among the answer's keys is deleted with its content; one with a chosen option is
          * kept. Fields with no answer at all are left untouched, so an unanswered question never
-         * silently deletes a clause.
+         * silently deletes a clause. Nested conditions: an inner control inside a dropped outer one
+         * goes with it (skipped here, its id no longer resolves).
          */
         _applyConditions: function (answers) {
             if (!this._canEdit()) return { ok: false, reason: 'readOnly' };
@@ -403,7 +413,8 @@ define([
                 if (!m) return;
                 var chosen = answers[m[1]];
                 if (!_.isArray(chosen)) return;
-                if (chosen.indexOf(m[2]) === -1) drop.push(cc);
+                var keys = m[2].split('|');
+                if (!keys.some(function (k) { return chosen.indexOf(k) !== -1; })) drop.push(cc);
             });
             if (!drop.length) return { ok: true, removed: 0 };
             try {
@@ -414,7 +425,12 @@ define([
                 });
                 if (locked) return { ok: false, reason: 'locked' };
                 doc.StartAction(AscDFH.historydescription_Document_RemoveContentControl);
-                drop.forEach(function (cc) { doc.RemoveContentControl(cc.GetId()); });
+                drop.forEach(function (cc) {
+                    // An outer drop earlier in document order has already taken this one with it.
+                    var liveIds = {};
+                    doc.GetAllContentControls().forEach(function (c) { liveIds[c.GetId()] = true; });
+                    if (liveIds[cc.GetId()]) doc.RemoveContentControl(cc.GetId());
+                });
                 doc.Recalculate();
                 doc.UpdateInterface();
                 doc.FinalizeAction();
