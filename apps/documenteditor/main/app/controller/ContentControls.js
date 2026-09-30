@@ -43,7 +43,7 @@
  *                       new controls and, when editable, once to existing ones whose shading differs.
  *   app    -> editor : { __tl:'tl-office-fields', type:'fill', requestId, values:{ <fieldKey> | t:<conditionalTextID>: <text> | { text, lines, list, paras, clear } } }
  *                       An inline control takes `text` (or `lines`, joined by line breaks); a BLOCK control given a `list` becomes one
- *                       bullet paragraph per entry (a multiple-choice answer), styled like the
+ *                       bullet paragraph per entry (a multiple-choice answer; numbered with `numbered:true`), styled like the
  *                       template's first paragraph in that block. `paras` does the same without bullets (a
  *                       conditional text's paragraphs); `clear` empties the control (its alias shows).
  *   app    -> editor : { __tl:'tl-office-fields', type:'applyConditions', requestId, answers:{ <fieldID>: [<optionKey>] }, dropTags?:[<tag>] }
@@ -403,10 +403,15 @@ define([
                 if (isBlock && !list && text) list = [text];
                 if (isBlock ? !(list && list.length) : !text) return;
                 if (isBlock) {
-                    // Compare item by item, ignoring the bullet glyphs and paragraph marks.
-                    var norm = current.split(/\r?\n/).map(function (l) { return l.replace(/^[^\t]*\t/, '').trim(); }).filter(Boolean).join('\n');
-                    if (norm === list.join('\n')) return;
-                    todo.push({ cc: cc, list: list.slice(0, 200).map(function (x) { return x.slice(0, 2000); }) });
+                    var numbered = !!(v && v.numbered === true);
+                    // Compare item by item, ignoring the list glyphs and paragraph marks — but a switch
+                    // between bullets and numbers (the glyph kind) still refills.
+                    var rows = current.split(/\r?\n/).filter(function (l) { return l.trim(); });
+                    var norm = rows.map(function (l) { return l.replace(/^[^\t]*\t/, '').trim(); }).join('\n');
+                    var glyph = rows.length && /^[^\t]*\t/.test(rows[0]) ? rows[0].split('\t')[0] : null;
+                    var sameKind = glyph !== null && /\d/.test(glyph) === numbered;
+                    if (norm === list.join('\n') && sameKind) return;
+                    todo.push({ cc: cc, list: list.slice(0, 200).map(function (x) { return x.slice(0, 2000); }), numbered: numbered });
                 } else if (lines && lines.length > 1) {
                     if (current.replace(/\r/g, '') !== lines.join('\n')) todo.push({ cc: cc, lines: lines.slice(0, 50) });
                 } else if (current !== text) {
@@ -423,7 +428,7 @@ define([
                 });
                 if (locked) return { ok: false, reason: 'locked' };
                 doc.StartAction(AscDFH.historydescription_Document_SetContentControlText);
-                var bullet = null;
+                var levels = {};
                 todo.forEach(function (x) {
                     if (x.clear) {
                         if (x.block) new AscBuilder.ApiBlockLvlSdt(x.cc).GetContent().RemoveAllElements();
@@ -431,8 +436,12 @@ define([
                         return;
                     }
                     if (x.list) {
-                        if (!x.plain && !bullet) bullet = new AscBuilder.ApiDocument(doc).CreateNumbering('bullet').GetLevel(0);
-                        this._fillList(x.cc, x.list, x.plain ? null : bullet);
+                        var kind = x.numbered ? 'numbered' : 'bullet';
+                        // One numbering per numbered list, so each restarts at 1; bullets can share.
+                        var level = null;
+                        if (!x.plain) level = kind === 'bullet' && levels.bullet ? levels.bullet : new AscBuilder.ApiDocument(doc).CreateNumbering(kind).GetLevel(0);
+                        if (kind === 'bullet') levels.bullet = level;
+                        this._fillList(x.cc, x.list, level);
                         return;
                     }
                     if (x.cc.IsPlaceHolder && x.cc.IsPlaceHolder()) x.cc.ReplacePlaceHolderWithContent();
