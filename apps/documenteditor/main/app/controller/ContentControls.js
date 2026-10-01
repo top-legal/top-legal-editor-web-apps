@@ -47,6 +47,7 @@
  *                       template's first paragraph in that block. `paras` does the same without bullets (a
  *                       conditional text's paragraphs); `clear` empties the control (its alias shows).
  *   app    -> editor : { __tl:'tl-office-fields', type:'applyConditions', requestId, answers:{ <fieldID>: [<optionKey>] }, dropTags?:[<tag>] }
+ *                       After removing, the numbering is healed (see _numberingPlan): result carries `renumbered`.
  *   editor -> app    : { __tl:'tl-office-fields', type:'ready', version, canEdit }
  *   editor -> app    : { __tl:'tl-office-fields', type:'result', requestId, ok, reason?, id?, text?, controls? }
  *
@@ -513,6 +514,8 @@ define([
             if (_.isArray(dropTags)) dropTags.forEach(function (t) { if (typeof t === 'string' && TAG_RE.test(t)) dropSet[t] = true; });
             this._ownControls().forEach(function (cc) {
                 if (dropSet[cc.GetTag()]) { drop.push(cc); return; }
+                // A dynamic section (`tl:c:s.<conditionID>=show`) is answered like any condition: the
+                // host evaluates its condition and sends `s.<conditionID>: ['show' | 'hide']`.
                 var m = /^tl:c:([^=]+)=(.+)$/.exec(cc.GetTag());
                 if (!m) return;
                 var chosen = answers[m[1]];
@@ -521,6 +524,9 @@ define([
                 if (!keys.some(function (k) { return chosen.indexOf(k) !== -1; })) drop.push(cc);
             });
             if (!drop.length) return { ok: true, removed: 0 };
+            // How the numbering counts BEFORE anything goes; healed against it once the blocks are gone.
+            var plan = null;
+            try { plan = this._numberingPlan(); } catch (e) { plan = null; }
             try {
                 var locked = doc.Document_Is_SelectionLocked(AscCommon.changestype_None, {
                     Type: AscCommon.changestype_2_ElementsArray_and_Type,
@@ -535,13 +541,137 @@ define([
                     doc.GetAllContentControls().forEach(function (c) { liveIds[c.GetId()] = true; });
                     if (liveIds[cc.GetId()]) doc.RemoveContentControl(cc.GetId());
                 });
+                var renumbered = 0;
+                // Same undo step as the removal. A failure leaves the numbering as Word would show it.
+                try { if (plan) renumbered = this._healNumbering(plan); } catch (e) { renumbered = -1; }
                 doc.Recalculate();
                 doc.UpdateInterface();
                 doc.FinalizeAction();
-                return { ok: true, removed: drop.length };
+                return { ok: true, removed: drop.length, renumbered: renumbered };
             } catch (e) {
                 return { ok: false, reason: 'error' };
             }
+        },
+
+        // ===============================================================
+        // Numbering heal
+        // ===============================================================
+        //
+        // Templates often restart numbering by hand: "§ 1" in every part, "(1)" in every clause is
+        // done by switching paragraphs onto another list (or a list with a start override) rather
+        // than by a restart rule. Counters are kept per abstract list, so once a clause is removed,
+        // a later run of paragraphs that continued an earlier counter shows a gap or a repeat
+        // (§ 1 2 3 5 6 7). Measured on real templates in Word and Euro-Office alike.
+        //
+        // The plan reads, before removal, what each kind of numbered paragraph (paragraph style +
+        // level) counts within: which other kind restarts it (a part restarts its §, a § its (n)),
+        // or none (it counts through the whole document). A kind whose numbers do not follow one
+        // such rule is left alone. After removal, every paragraph whose number no longer matches its
+        // position gets what Euro-Office's own "Restart numbering" does: a copy of its list (same
+        // formatting, so nothing looks different) starting at the expected value, for it and the
+        // following paragraphs of the same kind, scope and list.
+
+        /** Every numbered body paragraph in document order: { para, kind, numId, lvl, value }. */
+        _numberedParagraphs: function () {
+            var doc = this._doc();
+            var paras = [];
+            (doc.Content || []).forEach(function (el) { if (el && typeof el.GetAllParagraphs === 'function') el.GetAllParagraphs({ All: true }, paras); });
+            var out = [];
+            paras.forEach(function (p) {
+                if (!p || typeof p.GetNumPr !== 'function') return;
+                var numPr = p.GetNumPr();
+                if (!numPr || numPr.NumId === undefined || numPr.NumId === null || numPr.NumId === '0') return;
+                var parent = p.GetParent && p.GetParent();
+                if (!parent || typeof parent.CalculateNumberingValues !== 'function' || p.GetIndex() === -1) return;
+                var lvl = numPr.Lvl || 0;
+                var info = parent.CalculateNumberingValues(p, numPr);
+                var value = info && typeof info[lvl] === 'number' ? info[lvl] : null;
+                if (value === null) return;
+                var style = typeof p.Style_Get === 'function' ? p.Style_Get() : null;
+                var num = doc.GetNumbering().GetNum(numPr.NumId);
+                var kind = style ? 's:' + style + '|' + lvl : 'n:' + (num ? num.GetAbstractNumId() : numPr.NumId) + '|' + lvl;
+                out.push({ para: p, kind: kind, numId: numPr.NumId, lvl: lvl, value: value });
+            });
+            return out;
+        },
+
+        /** Per kind: { scope: <kind that restarts it> | null, first: <its first value> }. */
+        _numberingPlan: function () {
+            var items = this._numberedParagraphs();
+            var kinds = _.uniq(items.map(function (x) { return x.kind; }));
+            var counts = _.countBy(items, 'kind');
+            var plan = {};
+            // Does kind k number first, first+1, ... restarting after every `scope` paragraph?
+            var follows = function (k, scope, first) {
+                var prev = null;
+                var restart = true;
+                for (var i = 0; i < items.length; i++) {
+                    var x = items[i];
+                    if (scope !== null && x.kind === scope) { restart = true; continue; }
+                    if (x.kind !== k) continue;
+                    var expected = restart ? first : prev + 1;
+                    if (x.value !== expected) return false;
+                    prev = x.value;
+                    restart = false;
+                }
+                return true;
+            };
+            kinds.forEach(function (k) {
+                var first = _.find(items, function (x) { return x.kind === k; }).value;
+                if (follows(k, null, first)) { plan[k] = { scope: null, first: first }; return; }
+                // The nearest kind that explains every restart: of those that do, the most frequent
+                // (a clause restarts its "a." list, not the part the clause sits in).
+                var scopes = kinds.filter(function (o) { return o !== k && follows(k, o, first); });
+                scopes.sort(function (a, b) { return counts[b] - counts[a]; });
+                if (scopes.length) plan[k] = { scope: scopes[0], first: first };
+            });
+            return plan;
+        },
+
+        /** Bring every planned kind back to first, first+1, ... per scope. Returns the paragraphs re-listed. */
+        _healNumbering: function (plan) {
+            var doc = this._doc();
+            var numbering = doc.GetNumbering();
+            var changed = 0;
+            // Each pass fixes the first wrong paragraph (and its run); bounded by the paragraph count.
+            for (var pass = 0; pass < 500; pass++) {
+                var items = this._numberedParagraphs();
+                var wrong = null;
+                var run = [];
+                Object.keys(plan).some(function (k) {
+                    var rule = plan[k];
+                    var pos = 0;
+                    for (var i = 0; i < items.length; i++) {
+                        var x = items[i];
+                        if (rule.scope !== null && x.kind === rule.scope) { pos = 0; if (wrong) break; continue; }
+                        if (x.kind !== k) continue;
+                        if (wrong) {
+                            // The run: same kind, same scope, still on the list the wrong one was on.
+                            if (x.numId !== wrong.numId) break;
+                            run.push(x);
+                            continue;
+                        }
+                        pos += 1;
+                        if (x.value !== rule.first + pos - 1) {
+                            wrong = x;
+                            wrong.expected = rule.first + pos - 1;
+                            run.push(x);
+                        }
+                    }
+                    return !!wrong;
+                });
+                if (!wrong) return changed;
+                var num = numbering.GetNum(wrong.numId);
+                if (!num) return changed;
+                // Exactly Euro-Office's "Restart numbering": a copy of the list, started where it should.
+                var copy = num.Copy();
+                var lvl = copy.GetLvl(wrong.lvl).Copy();
+                lvl.Start = wrong.expected;
+                copy.SetLvl(lvl, wrong.lvl);
+                run.forEach(function (x) { x.para.SetNumPr(copy.GetId(), x.lvl); });
+                changed += run.length;
+            }
+            return changed;
         },
     }, {}));
 });
