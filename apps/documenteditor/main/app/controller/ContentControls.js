@@ -48,6 +48,12 @@
  *                       conditional text's paragraphs); `clear` empties the control (its alias shows).
  *   app    -> editor : { __tl:'tl-office-fields', type:'applyConditions', requestId, answers:{ <fieldID>: [<optionKey>] }, dropTags?:[<tag>] }
  *                       After removing, the numbering is healed (see _numberingPlan): result carries `renumbered`.
+ *   app    -> editor : { __tl:'tl-office-fields', type:'sections', requestId, show:{ <tag>: true|false } }
+ *                       Live dynamic sections while drafting (`tl:c:s.<conditionID>=show` blocks): hide empties
+ *                       the block, show puts its paragraphs back. Each section's paragraphs are stored once, the
+ *                       first time this is called, inside the document (custom XML part), so a reload or another
+ *                       editor can still bring a hidden one back. Numbering is healed after every change.
+ *                       Tags left out are untouched. The host refills fields afterwards.
  *   editor -> app    : { __tl:'tl-office-fields', type:'ready', version, canEdit }
  *   editor -> app    : { __tl:'tl-office-fields', type:'result', requestId, ok, reason?, id?, text?, controls? }
  *
@@ -189,6 +195,7 @@ define([
                 case 'colors': me._result(requestId, me._setColors(d)); return;
                 case 'fill': me._result(requestId, me._fill(d.values)); return;
                 case 'applyConditions': me._result(requestId, me._applyConditions(d.answers, d.dropTags)); return;
+                case 'sections': me._result(requestId, me._sections(d.show)); return;
                 default: me._result(requestId, { ok: false, reason: 'unsupported' });
             }
         },
@@ -542,6 +549,8 @@ define([
                     if (liveIds[cc.GetId()]) doc.RemoveContentControl(cc.GetId());
                 });
                 var renumbered = 0;
+                // Drafting is over: the stored section copies have no further use.
+                try { this._dropSectionStore(); } catch (e) { /* a leftover part is harmless */ }
                 // Same undo step as the removal. A failure leaves the numbering as Word would show it.
                 try { if (plan) renumbered = this._healNumbering(plan); } catch (e) { renumbered = -1; }
                 doc.Recalculate();
@@ -550,6 +559,203 @@ define([
                 return { ok: true, removed: drop.length, renumbered: renumbered };
             } catch (e) {
                 return { ok: false, reason: 'error' };
+            }
+        },
+
+        // ===============================================================
+        // Live dynamic sections
+        // ===============================================================
+        //
+        // A dynamic section is a block control tagged `tl:c:s.<conditionID>=show`. While drafting, the
+        // host says which sections its answers currently show. Hiding empties the block down to one
+        // collapsed, unnumbered paragraph (an empty block would show its placeholder); showing puts the
+        // section's original paragraphs back. The originals are serialized (document builder JSON) the
+        // first time `sections` runs — the drafted document is then still an untouched copy of the
+        // template — and kept in a custom XML part, so they survive a reload and reach co-editors.
+        // Finishing (applyConditions) removes hidden blocks for good and drops the part.
+
+        _sectionPartNs: 'urn:top-legal:dynamic-sections',
+
+        _isSectionTag: function (tag) { return typeof tag === 'string' && tag.indexOf('tl:c:s.') === 0; },
+
+        /** The stored copies: { <tag>: { json, hidden } }, read from the custom XML part once per session. */
+        _sectionStore: function () {
+            if (this._sections_) return this._sections_;
+            var store = {};
+            try {
+                var text = this._sectionPartText();
+                var m = /<data>([^<]*)<\/data>/.exec(text || '');
+                if (m) store = JSON.parse(decodeURIComponent(escape(atob(m[1])))) || {};
+            } catch (e) { store = {}; }
+            this._sections_ = store;
+            return store;
+        },
+
+        /** The stored part's XML, or ''. */
+        _sectionPartText: function () {
+            var mgr = this._doc().getCustomXmlManager();
+            if (!mgr) return '';
+            for (var i = 0; i < mgr.getCount(); i++) {
+                var text = '';
+                try { text = mgr.getCustomXMLString(mgr.getCustomXml(i)) || ''; } catch (e) { text = ''; }
+                if (text.indexOf(this._sectionPartNs) !== -1) return text;
+            }
+            return '';
+        },
+
+        _saveSectionStore: function () {
+            var doc = this._doc();
+            var mgr = doc.getCustomXmlManager();
+            if (!mgr) return;
+            this._dropSectionPart();
+            var data = btoa(unescape(encodeURIComponent(JSON.stringify(this._sections_ || {}))));
+            mgr.createCustomXml('<tlSections xmlns="' + this._sectionPartNs + '"><data>' + data + '</data></tlSections>');
+        },
+
+        _dropSectionPart: function () {
+            var mgr = this._doc().getCustomXmlManager();
+            if (!mgr) return;
+            for (var i = mgr.getCount() - 1; i >= 0; i--) {
+                var xml = mgr.getCustomXml(i);
+                var text = '';
+                try { text = mgr.getCustomXMLString(xml) || ''; } catch (e) { text = ''; }
+                if (text.indexOf(this._sectionPartNs) !== -1) mgr.deleteExactXml(xml.itemId || (xml.getUid && xml.getUid()), xml.prefix);
+            }
+        },
+
+        _dropSectionStore: function () {
+            this._dropSectionPart();
+            this._sections_ = {};
+        },
+
+        /** Exact copies of each section's elements, this session only (styles and lists by identity). */
+        _copies: function () {
+            if (!this._copies_) this._copies_ = {};
+            return this._copies_;
+        },
+
+        _copyElements: function (apiContent) {
+            var out = [];
+            for (var i = 0; i < apiContent.GetElementsCount(); i++) out.push(apiContent.GetElement(i).Copy());
+            return out;
+        },
+
+        /**
+         * Fresh elements to put back: copies of this session's exact copy, or — after a reload — the
+         * stored JSON (styles are re-applied by name afterwards; its lists come back as copies, which
+         * the numbering heal then brings in line).
+         */
+        _restoredElements: function (tag, entry) {
+            var exact = this._copies()[tag];
+            if (exact) return exact.map(function (el) { return el.Copy(); });
+            var restored = AscBuilder.Api.FromJSON(entry.json);
+            var n = restored && typeof restored.GetElementsCount === 'function' ? restored.GetElementsCount() : 0;
+            var out = [];
+            // Copies: the parsed elements still belong to the reader's scratch content.
+            for (var i = 0; i < n; i++) out.push(restored.GetElement(i).Copy());
+            return out;
+        },
+
+        /** Paragraph style NAMES in order (style ids are not stable across sessions). */
+        _styleNames: function (cc) {
+            var doc = this._doc();
+            var paras = [];
+            cc.GetAllParagraphs({ All: true }, paras);
+            return paras.map(function (p) {
+                var id = p.Style_Get && p.Style_Get();
+                var st = id && doc.Styles.Get(id);
+                return st ? st.GetName() : null;
+            });
+        },
+
+        _applyStyleNames: function (cc, names) {
+            if (!Array.isArray(names)) return;
+            var doc = this._doc();
+            var paras = [];
+            cc.GetAllParagraphs({ All: true }, paras);
+            paras.forEach(function (p, i) {
+                var id = names[i] ? doc.Styles.GetStyleIdByName(names[i]) : null;
+                if (id && typeof p.Style_Add === 'function') p.Style_Add(id, true);
+            });
+        },
+
+        /** One collapsed, unnumbered, empty paragraph: what a hidden section leaves behind until finishing. */
+        _collapsedParagraph: function () {
+            var para = AscBuilder.Api.CreateParagraph();
+            para.SetSpacingBefore(0);
+            para.SetSpacingAfter(0);
+            para.SetSpacingLine(1, 'exact');
+            para.SetNumbering(null);
+            para.SetFontSize(1);
+            return para;
+        },
+
+        _sections: function (show) {
+            if (!this._canEdit()) return { ok: false, reason: 'readOnly' };
+            if (!show || typeof show !== 'object') return { ok: false, reason: 'badShow' };
+            var me = this;
+            var doc = me._doc();
+            var store = me._sectionStore();
+            var stored = false;
+            var todo = [];
+            me._ownControls().forEach(function (cc) {
+                var tag = cc.GetTag();
+                if (!me._isSectionTag(tag) || !(cc.IsBlockLevel && cc.IsBlockLevel())) return;
+                var entry = store[tag];
+                if (!entry) {
+                    // First sight: the block still holds the template's paragraphs.
+                    var content = new AscBuilder.ApiBlockLvlSdt(cc).GetContent();
+                    entry = store[tag] = { json: content.ToJSON(true, false), styles: me._styleNames(cc), hidden: false };
+                    me._copies()[tag] = me._copyElements(content);
+                    stored = true;
+                }
+                if (typeof show[tag] !== 'boolean') return;
+                if (show[tag] === !entry.hidden) return;
+                todo.push({ cc: cc, tag: tag, entry: entry, show: show[tag] });
+            });
+            if (!todo.length) {
+                if (stored) {
+                    try { doc.StartAction(AscDFH.historydescription_Document_AddContentControl); me._saveSectionStore(); doc.FinalizeAction(); } catch (e) { /* kept in memory */ }
+                }
+                return { ok: true, changed: 0 };
+            }
+            try {
+                var locked = doc.Document_Is_SelectionLocked(AscCommon.changestype_None, {
+                    Type: AscCommon.changestype_2_ElementsArray_and_Type,
+                    Elements: todo.map(function (x) { return x.cc; }),
+                    CheckType: AscCommon.changestype_ContentControl_Properties,
+                });
+                if (locked) return { ok: false, reason: 'locked' };
+                var plan = null;
+                try { plan = me._numberingPlan(); } catch (e) { plan = null; }
+                doc.StartAction(AscDFH.historydescription_Document_AddContentControl);
+                todo.forEach(function (x) {
+                    var content = new AscBuilder.ApiBlockLvlSdt(x.cc).GetContent();
+                    if (x.show) {
+                        var elements = me._restoredElements(x.tag, x.entry);
+                        if (!elements.length) return;
+                        content.RemoveAllElements();
+                        elements.forEach(function (el) { content.Push(el); });
+                        // RemoveAllElements leaves one empty paragraph behind; the section starts after it.
+                        if (content.GetElementsCount() > elements.length) content.RemoveElement(0);
+                        if (!me._copies()[x.tag]) me._applyStyleNames(x.cc, x.entry.styles);
+                    } else {
+                        content.RemoveAllElements();
+                        content.Push(me._collapsedParagraph());
+                        if (content.GetElementsCount() > 1) content.RemoveElement(0);
+                    }
+                    x.entry.hidden = !x.show;
+                });
+                var renumbered = 0;
+                try { if (plan) renumbered = me._healNumbering(plan); } catch (e) { renumbered = -1; }
+                me._saveSectionStore();
+                doc.Recalculate();
+                doc.UpdateInterface();
+                doc.FinalizeAction();
+                return { ok: true, changed: todo.length, renumbered: renumbered };
+            } catch (e) {
+                try { doc.FinalizeAction(); } catch (e2) { /* no open action */ }
+                return { ok: false, reason: 'error', detail: String(e && e.message || e).slice(0, 200) };
             }
         },
 
