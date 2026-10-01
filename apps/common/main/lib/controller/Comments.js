@@ -269,15 +269,42 @@ define([
             if (groups.indexOf('external') >= 0) return 'external';
             return null;
         },
-        // top.legal: a new comment defaults to the author's OWN team (internal user -> 'internal',
-        // external user -> 'external'), never 'shared' — sharing with the other side is an explicit
-        // choice. The team comes from the group prefix tl-office puts on the editor user's name.
+        // top.legal: the viewer's OWN team ('internal'|'external'), from the group prefix tl-office
+        // puts on the editor user's name; 'shared' if there is none.
         eoDefaultScope: function () {
             var P = AscCommon.UserInfoParser;
             var groups = (P && P.getParsedGroups && P.getCurrentName) ? (P.getParsedGroups(P.getCurrentName()) || []) : [];
             if (groups.indexOf('external') >= 0) return 'external';
             if (groups.indexOf('internal') >= 0) return 'internal';
             return 'shared';
+        },
+        // top.legal: scope a NEW comment starts with. Internal users default to their own team
+        // (sharing with the counterparty is an explicit choice). External users default to
+        // 'shared': from their point of view they are the internal party and expect their
+        // comments to reach the other side; keeping it to their own team is the explicit choice.
+        eoNewCommentScope: function () {
+            var own = this.eoDefaultScope();
+            return own === 'external' ? 'shared' : own;
+        },
+        // top.legal: scope labels are relative to the viewer. Every team sees its own team as
+        // "Internal", so an external user never sees "External" for their own comments.
+        eoScopeLabel: function (scope) {
+            if (!scope || scope === 'shared') return 'Shared';
+            var own = this.eoDefaultScope();
+            if (own === 'shared') return scope.charAt(0).toUpperCase() + scope.slice(1);
+            return scope === own ? 'Internal' : (own === 'external' ? 'Counterparty' : 'External');
+        },
+        // top.legal: the static templates list shared/internal/external. Keep only shared + the
+        // viewer's own team (labelled "Internal team only"); the other team's option is dropped.
+        eoRelabelSelect: function (select) {
+            var own = this.eoDefaultScope();
+            if (own === 'shared') return;
+            for (var i = select.options.length - 1; i >= 0; i--) {
+                var o = select.options[i];
+                if (o.value === 'shared') o.text = 'Both teams (shared)';
+                else if (o.value === own) o.text = 'Internal team only';
+                else select.remove(i);
+            }
         },
         eoInjectCss: function () {
             if (document.getElementById('eo-comments-css')) return;
@@ -305,15 +332,17 @@ define([
         eoBindScopeSelect: function () {
             if (this._eoScopeBound) return;
             this._eoScopeBound = true;
-            this._eoCurrentScope = this._eoCurrentScope || this.eoDefaultScope();
+            this._eoCurrentScope = this._eoCurrentScope || this.eoNewCommentScope();
             var me = this;
+            window.eoScopeLabel = function (scope) { return me.eoScopeLabel(scope); };
             // the add-comment selects are rendered from static templates (first option = shared);
             // show the actual default on every freshly rendered one.
             var eoSyncSelects = function () {
                 var els = document.querySelectorAll('.eo-scope-select:not([data-eo-init])');
                 for (var i = 0; i < els.length; i++) {
                     els[i].setAttribute('data-eo-init', '1');
-                    els[i].value = me._eoCurrentScope || me.eoDefaultScope();
+                    me.eoRelabelSelect(els[i]);
+                    els[i].value = me._eoCurrentScope || me.eoNewCommentScope();
                     me.eoSyncCardBadge(els[i]);
                 }
             };
@@ -325,7 +354,7 @@ define([
             document.addEventListener('change', function (e) {
                 var t = e.target;
                 if (t && t.classList && t.classList.contains('eo-scope-select')) {
-                    me._eoCurrentScope = t.value || me.eoDefaultScope();
+                    me._eoCurrentScope = t.value || me.eoNewCommentScope();
                     me.eoSyncCardBadge(t);   // chip on the card being written follows the choice
                 }
             }, true);
@@ -381,7 +410,7 @@ define([
         eoSetBadge: function (b, scope) {
             b.className = 'eo-scope-badge eo-scope-badge-' + scope + ' eo-scope-badge-btn';
             b.setAttribute('data-scope', scope);
-            b.textContent = scope.charAt(0).toUpperCase() + scope.slice(1);
+            b.textContent = this.eoScopeLabel(scope);
             var card = b.closest ? b.closest('.user-comment-item') : null;
             if (card) card.className = card.className.replace(/\s*eo-scope-(shared|internal|external)\b/g, '') + ' eo-scope-' + scope;
         },
@@ -456,7 +485,7 @@ define([
                     // top.legal: scope from the panel select (stable DOM) → userData (round-trips)
                     // + the comment's username group (drives per-team commentGroups visibility).
                     var eoPan = document.getElementById('comment-scope-new');
-                    var eoScope = (eoPan && eoPan.value) || this._eoCurrentScope || this.eoDefaultScope();
+                    var eoScope = (eoPan && eoPan.value) || this._eoCurrentScope || this.eoNewCommentScope();
                     comment.asc_putUserData(this.eoEncodeScope(comment.asc_getUserData(), eoScope));
                     comment.asc_putUserName(this.eoGroupUserName(eoScope));
 
@@ -1594,7 +1623,7 @@ define([
 
         addDummyComment: function () {
             if (this.api) {
-                this._eoCurrentScope = this.eoDefaultScope();   // top.legal: each new comment starts at the author's own team
+                this._eoCurrentScope = this.eoNewCommentScope();   // top.legal: each new comment starts at its default scope (external: shared)
                 var me = this, anchor = null, date = new Date(), dialog = this.getPopover();
                 if (dialog) {
                     if (this.popoverComments.length) {// can add new comment to text with other comments
@@ -1687,7 +1716,7 @@ define([
                         comment.asc_putDocumentFlag(false);
 
                     // top.legal: chosen scope -> userData (round-trips) + username group (per-team visibility).
-                    var eoScope = this._eoCurrentScope || this.eoDefaultScope();
+                    var eoScope = this._eoCurrentScope || this.eoNewCommentScope();
                     comment.asc_putUserData(this.eoEncodeScope(comment.asc_getUserData(), eoScope));
                     comment.asc_putUserName(this.eoGroupUserName(eoScope));
 
