@@ -32,7 +32,7 @@
  *   tab  -> app : { __tl:'tl-office-ribbon', type:'action', id, value? }
  *
  * CONTEXT MENU. `contextMenu: [{id, label}]` (optional, additive — no version bump) declares an
- * entry for the right-click menu, shown under "Add comment". The first two entries are used. A click
+ * entry for the right-click menu, shown under "Add comment". The first three entries are used. A click
  * is reported as an ordinary `action` with that id, so the host handles it like a ribbon button.
  *
  * ANCHORS (same channel, `anchors:*` types) — text ranges the host can attach things to, used for

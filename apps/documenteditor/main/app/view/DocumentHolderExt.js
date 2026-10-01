@@ -29,8 +29,8 @@ define([], function () {
     if (window.DE && window.DE.Views && window.DE.Views.DocumentHolder) {
         let dh = window.DE.Views.DocumentHolder.prototype;
 
-        // top.legal: up to two host-declared context-menu entries ("Add task", or a Word template's
-        // "Link input field" / "Make conditional"), placed under "Add comment".
+        // top.legal: up to three host-declared context-menu entries ("Add task", or a Word template's
+        // "Link input field" / "Link conditional text" / "Add dynamic section"), placed under "Add comment".
         // Label, id and whether it exists at all come from the dealroom's ribbon descriptor
         // (`contextMenu`, see NegotiationTab.js), so a host that declares nothing sees no change.
         dh.createTlHostMenuItem = function(index) {
@@ -1334,6 +1334,7 @@ define([], function () {
             });
             me.menuTlHostTable = me.createTlHostMenuItem(0);
             me.menuTlHostTable2 = me.createTlHostMenuItem(1);
+            me.menuTlHostTable3 = me.createTlHostMenuItem(2);
             /** coauthoring end **/
 
             me.menuAddHyperlinkTable = new Common.UI.MenuItem({
@@ -1865,6 +1866,7 @@ define([], function () {
                     me.menuAddCommentTable.setDisabled(value.paraProps!==undefined && value.paraProps.locked===true);
                     me.syncTlHostMenuItem(me.menuTlHostTable);
                     me.syncTlHostMenuItem(me.menuTlHostTable2);
+                    me.syncTlHostMenuItem(me.menuTlHostTable3);
                     /** coauthoring end **/
 
                     var in_field = me.api.asc_HaveFields(true);
@@ -1914,6 +1916,7 @@ define([], function () {
                     /** coauthoring end **/
                     me.menuTlHostTable,
                     me.menuTlHostTable2,
+                    me.menuTlHostTable3,
                     menuNumberingTable,
                     me.menuAddHyperlinkTable,
                     menuHyperlinkTable,
@@ -2092,6 +2095,7 @@ define([], function () {
             });
             me.menuTlHostPara = me.createTlHostMenuItem(0);
             me.menuTlHostPara2 = me.createTlHostMenuItem(1);
+            me.menuTlHostPara3 = me.createTlHostMenuItem(2);
             /** coauthoring end **/
 
             var menuHyperlinkParaSeparator = new Common.UI.MenuItem({
@@ -2537,6 +2541,7 @@ define([], function () {
                     // Keep the separator when the task entry is the only thing below it.
                     if (me.syncTlHostMenuItem(me.menuTlHostPara)) menuCommentSeparatorPara.setVisible(true);
                     me.syncTlHostMenuItem(me.menuTlHostPara2);
+                    me.syncTlHostMenuItem(me.menuTlHostPara3);
 
                     // Nextcloud Assistant entry — show only when the host has
                     // announced the Assistant app is available AND the
@@ -2621,6 +2626,7 @@ define([], function () {
                     /** coauthoring end **/
                     me.menuTlHostPara,
                     me.menuTlHostPara2,
+                    me.menuTlHostPara3,
                     menuHyperlinkParaSeparator,
                     me.menuAddHyperlinkPara,
                     menuHyperlinkPara,
