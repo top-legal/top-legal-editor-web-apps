@@ -831,6 +831,8 @@ define([
                 scopes.sort(function (a, b) { return counts[b] - counts[a]; });
                 if (scopes.length) plan[k] = { scope: scopes[0], first: first };
             });
+            // Numbers typed as text ("1.", "1.2", "(3)") are healed separately; see _typedPlan.
+            Object.defineProperty(plan, 'typed', { value: this._typedPlan(), enumerable: false });
             return plan;
         },
 
@@ -866,7 +868,7 @@ define([
                     }
                     return !!wrong;
                 });
-                if (!wrong) return changed;
+                if (!wrong) return changed + this._healTyped(plan.typed);
                 var num = numbering.GetNum(wrong.numId);
                 if (!num) return changed;
                 // Exactly Euro-Office's "Restart numbering": a copy of the list, started where it should.
@@ -877,7 +879,159 @@ define([
                 run.forEach(function (x) { x.para.SetNumPr(copy.GetId(), x.lvl); });
                 changed += run.length;
             }
+            return changed + this._healTyped(plan.typed);
+        },
+
+        // ---------------------------------------------------------------
+        // Typed numbers
+        // ---------------------------------------------------------------
+        //
+        // Many templates type their numbers ("1. Definitions", "1.2  The receiving party ...",
+        // "(3) ..."). Those are plain text, so nothing renumbers them. A paragraph (without list
+        // numbering) that starts with a dotted number d1[.d2[.d3]] or "(n)" followed by white space is
+        // a typed number of that kind. The plan accepts a dotted kind only if, in the document as it
+        // stands, every number is its parent's current number plus the next value at its own level;
+        // "(n)" kinds get the same scope rule as lists. Healing rewrites just the digits in place
+        // (the formatting of the run they start in is kept).
+
+        _typedRe: /^(\d{1,3}(?:\.\d{1,3}){0,3})(\.?)(?=[ \t\u00a0\u2002\u2003])|^\((\d{1,3})\)(?=[ \t\u00a0])/,
+
+        /** Leading characters of a paragraph with where each sits: [{ run, pos, ch }]. Stops at a non-run. */
+        _leadingChars: function (p, max) {
+            // sdkjs element type ids (word/Editor/Paragraph/RunContent/Types.js); module-scoped there.
+            var RUN = 0x0027;
+            var out = [];
+            var content = p.Content || [];
+            for (var i = 0; i < content.length && out.length < max; i++) {
+                var run = content[i];
+                // Only plain runs: a number inside a field, link or nested control is left alone.
+                if (!run || run.Type !== RUN) return out;
+                for (var j = 0; j < run.Content.length && out.length < max; j++) {
+                    var item = run.Content[j];
+                    var ch = null;
+                    if (item.IsText && item.IsText()) ch = String.fromCharCode(item.Value);
+                    else if (item.IsSpace && item.IsSpace()) ch = ' ';
+                    else if (item.IsTab && item.IsTab()) ch = '\t';
+                    if (ch === null) return out;
+                    out.push({ run: run, pos: j, ch: ch });
+                }
+            }
+            return out;
+        },
+
+        /** Typed-number paragraphs in order: { para, kind, comps, dot, text, chars }. */
+        _typedParagraphs: function () {
+            var me = this;
+            var doc = me._doc();
+            var paras = [];
+            (doc.Content || []).forEach(function (el) { if (el && typeof el.GetAllParagraphs === 'function') el.GetAllParagraphs({ All: true }, paras); });
+            var out = [];
+            paras.forEach(function (p) {
+                if (!p || p.GetIndex() === -1 || (p.GetNumPr && p.GetNumPr())) return;
+                var chars = me._leadingChars(p, 20);
+                var lead = chars.map(function (c) { return c.ch; }).join('');
+                var m = me._typedRe.exec(lead);
+                if (!m) return;
+                if (m[3]) out.push({ para: p, kind: 'p', comps: [+m[3]], text: '(' + m[3] + ')', at: 1, len: m[3].length, chars: chars });
+                else {
+                    var comps = m[1].split('.').map(Number);
+                    out.push({ para: p, kind: 'd' + comps.length, comps: comps, dot: m[2], text: m[1], at: 0, len: m[1].length, chars: chars });
+                }
+            });
+            return out;
+        },
+
+        _typedPlan: function () {
+            var items = this._typedParagraphs();
+            var rules = {};
+            var cur = [];
+            var ok = {};
+            var first = {};
+            // Dotted kinds: each number is (parent's current numbers) + (next at its level).
+            items.forEach(function (x) {
+                if (x.kind === 'p') return;
+                var level = x.comps.length;
+                if (!(x.kind in ok)) { ok[x.kind] = true; first[x.kind] = x.comps[level - 1]; }
+                var parentOk = level === 1 || (cur.length >= level - 1 && x.comps.slice(0, level - 1).every(function (v, i) { return v === cur[i]; }));
+                var sameParentAsPrev = cur.length >= level && x.comps.slice(0, level - 1).every(function (v, i) { return v === cur[i]; });
+                var expected = sameParentAsPrev ? cur[level - 1] + 1 : first[x.kind];
+                if (!parentOk || x.comps[level - 1] !== expected) ok[x.kind] = false;
+                cur = x.comps.slice();
+            });
+            Object.keys(ok).forEach(function (k) {
+                // A kind needs at least two paragraphs to show a pattern.
+                var count = items.filter(function (x) { return x.kind === k; }).length;
+                if (ok[k] && count > 1) rules[k] = { first: first[k] };
+            });
+            // A deeper level is only safe when its parent level is too.
+            Object.keys(rules).forEach(function (k) {
+                var level = +k.slice(1);
+                for (var l = 1; l < level; l++) if (!rules['d' + l] && items.some(function (x) { return x.kind === 'd' + l; })) delete rules[k];
+            });
+            // "(n)": first, first+1, ... restarting after every paragraph of the nearest dotted kind that explains it.
+            var ps = items.filter(function (x) { return x.kind === 'p'; });
+            if (ps.length > 1) {
+                var pFirst = ps[0].comps[0];
+                var follows = function (scope) {
+                    var prev = null;
+                    var restart = true;
+                    for (var i = 0; i < items.length; i++) {
+                        var x = items[i];
+                        if (scope && x.kind === scope) { restart = true; continue; }
+                        if (x.kind !== 'p') continue;
+                        if (x.comps[0] !== (restart ? pFirst : prev + 1)) return false;
+                        prev = x.comps[0];
+                        restart = false;
+                    }
+                    return true;
+                };
+                var scope;
+                if (follows(null)) scope = null;
+                else ['d3', 'd2', 'd1'].some(function (k) { if (follows(k)) { scope = k; return true; } return false; });
+                if (scope !== undefined) rules.p = { first: pFirst, scope: scope };
+            }
+            return rules;
+        },
+
+        /** Rewrite typed numbers that no longer match their position. Returns the paragraphs changed. */
+        _healTyped: function (rules) {
+            if (!rules || !Object.keys(rules).length) return 0;
+            var items = this._typedParagraphs();
+            var changed = 0;
+            var cur = [];
+            var pCount = 0;
+            var me = this;
+            items.forEach(function (x) {
+                var want = null;
+                if (x.kind === 'p') {
+                    if (!rules.p) return;
+                    pCount += 1;
+                    want = String(rules.p.first + pCount - 1);
+                } else {
+                    var level = x.comps.length;
+                    if (rules.p && rules.p.scope === x.kind) pCount = 0;
+                    if (!rules[x.kind]) { cur = x.comps.slice(); return; }
+                    var sameParent = cur.length >= level;
+                    var next = sameParent ? cur[level - 1] + 1 : rules[x.kind].first;
+                    var comps = cur.slice(0, level - 1);
+                    while (comps.length < level - 1) comps.push(1);
+                    comps.push(next);
+                    cur = comps;
+                    want = comps.join('.');
+                }
+                var have = x.kind === 'p' ? String(x.comps[0]) : x.text;
+                if (want === have) return;
+                me._replaceLeading(x.chars, x.at, x.len, want);
+                changed += 1;
+            });
             return changed;
+        },
+
+        /** Replace chars[at .. at+len) with `text`, inside the run the first of them sits in. */
+        _replaceLeading: function (chars, at, len, text) {
+            var first = chars[at];
+            for (var i = at + len - 1; i >= at; i--) chars[i].run.RemoveFromContent(chars[i].pos, 1, true);
+            first.run.AddText(text, first.pos);
         },
     }, {}));
 });
