@@ -299,7 +299,12 @@ define([
         },
 
         _selectedText: function () {
-            try { return String(this.api.asc_GetSelectedText(true) || '').slice(0, MAX_TEXT); } catch (e) { return ''; }
+            // bClearText=true returns null once the selection spans paragraphs, so a multi-paragraph
+            // selection read as "nothing selected". bClearText=false joins paragraphs with \r\n.
+            try {
+                var text = this.api.asc_GetSelectedText(false);
+                return String(text || '').replace(/[\r\n]+$/, '').slice(0, MAX_TEXT);
+            } catch (e) { return ''; }
         },
 
         _findOwn: function (id) {
