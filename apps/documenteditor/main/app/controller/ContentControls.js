@@ -11,6 +11,12 @@
  *   tl:c:<inputFieldID>=<k1>|<k2>    ... when ANY of those options is chosen (AND = nest controls)
  *   tl:t:<conditionalTextID>         the text is replaced by a playbook conditional text's output
  *                                    (resolved by the host, nested conditions included)
+ *   tl:s:internal | tl:s:external    a party's signature area (block); the host turns it into the
+ *                                    signing anchor when a contract is drafted
+ *
+ * Signature areas can also be DRAGGED in from the host page: a drag carrying
+ * `application/x-tl-signature` ({ tag, alias }) is caught here before the SDK sees it, the cursor is
+ * put at the drop point by replaying the click there, and the control is inserted at it.
  *
  * A condition may be inline (a phrase inside a sentence) or block (whole paragraphs / a clause).
  *
@@ -77,7 +83,9 @@ define([
     // A field key may name a PART of a structured field (`__my_company.name`,
     // `<fieldID>.full_address.city`), hence the dot.
     var OPTION_KEY = '[A-Za-z0-9_ .-]{1,100}';
-    var TAG_RE = new RegExp('^tl:(f:[A-Za-z0-9_.-]{1,160}|c:[A-Za-z0-9_.-]{1,160}=' + OPTION_KEY + '(\\|' + OPTION_KEY + '){0,19}|t:[A-Za-z0-9_.-]{1,160})$');
+    var TAG_RE = new RegExp('^tl:(f:[A-Za-z0-9_.-]{1,160}|c:[A-Za-z0-9_.-]{1,160}=' + OPTION_KEY + '(\\|' + OPTION_KEY + '){0,19}|t:[A-Za-z0-9_.-]{1,160}|s:(internal|external))$');
+    var SIGNATURE_TAG_RE = /^tl:s:(internal|external)$/;
+    var DRAG_TYPE = 'application/x-tl-signature';
     var MAX_ALIAS = 120;
     // Text preview per control in a list — enough for the panel, never the whole clause.
     var MAX_TEXT = 200;
@@ -124,6 +132,7 @@ define([
             }
             try {
                 me._listen();
+                me._listenDrop();
                 me._postReady();
             } catch (e) { /* the host simply never sees 'ready' */ }
         },
@@ -195,6 +204,7 @@ define([
                 case 'insert': me._result(requestId, me._insert(d)); return;
                 case 'select': me._result(requestId, me._select(d.id)); return;
                 case 'unlink': me._result(requestId, me._unlink(d.id)); return;
+                case 'remove': me._result(requestId, me._remove(d.id)); return;
                 case 'colors': me._result(requestId, me._setColors(d)); return;
                 case 'fill': me._result(requestId, me._fill(d.values)); return;
                 case 'applyConditions': me._result(requestId, me._applyConditions(d.answers, d.dropTags)); return;
@@ -364,6 +374,83 @@ define([
             } catch (e) {
                 return { ok: false, reason: 'error' };
             }
+        },
+
+        // Remove deletes the control WITH its content (a signature area has no text worth keeping).
+        _remove: function (id) {
+            if (!this._canEdit()) return { ok: false, reason: 'readOnly' };
+            var cc = this._findOwn(id);
+            if (!cc) return { ok: false, reason: 'notFound' };
+            try {
+                this.api.asc_RemoveContentControl(cc.GetId());
+                return { ok: !this._findOwn(id), reason: this._findOwn(id) ? 'locked' : undefined };
+            } catch (e) {
+                return { ok: false, reason: 'error' };
+            }
+        },
+
+        // ===============================================================
+        // Drag and drop from the host
+        // ===============================================================
+
+        _isOurDrag: function (e) {
+            var types = e && e.dataTransfer && e.dataTransfer.types;
+            if (!types) return false;
+            for (var i = 0; i < types.length; i++) if (types[i] === DRAG_TYPE) return true;
+            return false;
+        },
+
+        /**
+         * Capture phase on the window, so the SDK's own drop handling (which would paste the drag's
+         * text) never sees our drags. Anything else passes through untouched.
+         */
+        _listenDrop: function () {
+            var me = this;
+            if (me._dropListening) return;
+            me._dropListening = true;
+            var over = function (e) {
+                if (!me._isOurDrag(e)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                try { e.dataTransfer.dropEffect = me._canEdit() ? 'copy' : 'none'; } catch (err) { /* cosmetic */ }
+            };
+            window.addEventListener('dragenter', over, true);
+            window.addEventListener('dragover', over, true);
+            window.addEventListener('drop', function (e) {
+                if (!me._isOurDrag(e)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                var d = null;
+                try { d = JSON.parse(e.dataTransfer.getData(DRAG_TYPE) || 'null'); } catch (err) { d = null; }
+                if (!d || typeof d.tag !== 'string' || !SIGNATURE_TAG_RE.test(d.tag)) return;
+                me._dropAt(e, d);
+            }, true);
+        },
+
+        /**
+         * Put the cursor where the drag was released by replaying a click on the element under it —
+         * the SDK's own hit-testing, so page, zoom and scroll are handled as for any click — then
+         * insert. The insert waits a beat: the click's selection update must land first.
+         */
+        _dropAt: function (e, d) {
+            var me = this;
+            var result = function (body) { me._post(_.extend({ type: 'dropped', tag: d.tag }, body)); };
+            if (!me._canEdit()) { result({ ok: false, reason: 'readOnly' }); return; }
+            try {
+                var target = document.elementFromPoint(e.clientX, e.clientY) || e.target;
+                var init = {
+                    bubbles: true, cancelable: true, view: window, detail: 1, button: 0, buttons: 1,
+                    clientX: e.clientX, clientY: e.clientY, screenX: e.screenX, screenY: e.screenY,
+                };
+                target.dispatchEvent(new MouseEvent('mousedown', init));
+                init.buttons = 0;
+                target.dispatchEvent(new MouseEvent('mouseup', init));
+            } catch (err) { /* insert at the current cursor instead */ }
+            setTimeout(function () {
+                var r = me._insert({ tag: d.tag, alias: d.alias, block: true });
+                result(r);
+                try { me._post({ type: 'result', requestId: 'drop', ok: r.ok, controls: me._list() }); } catch (err) { /* next poll */ }
+            }, 60);
         },
 
         // Unlink keeps the text and drops only the wrapper — the reverse of insert.
