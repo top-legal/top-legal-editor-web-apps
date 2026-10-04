@@ -153,6 +153,8 @@ require([
             'Common.Controllers.Protection',
             'Common.Controllers.Shortcuts',
             'Common.Controllers.ReviewChanges'
+            // top.legal: in-session AI comments. LAST so a failure here cannot affect the others.
+            ,'DocumentEdits'
         ]
     });
 
@@ -182,6 +184,7 @@ require([
                 'pdfeditor/main/app/controller/Search',
                 'pdfeditor/main/app/controller/Print',
                 'pdfeditor/main/app/controller/FormsTab',
+                'pdfeditor/main/app/controller/DocumentEdits',
                 'pdfeditor/main/app/view/ChartSettings',
                 'common/main/lib/util/utils',
                 'common/main/lib/controller/History',
