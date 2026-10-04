@@ -132,6 +132,31 @@ define([
             if (typeof id === 'string' && id) this._post({ type: 'action', id: id });
         },
 
+        /*
+         * SEARCH (`search:find`) — "show this passage": the host sends candidate strings, most
+         * specific first (the full quote, then shorter fallbacks such as the date inside it). The
+         * first one the document contains is found with the editor's own Find, which selects the
+         * match and scrolls to it. Replies `search:found { requestId, ok, text? }`.
+         */
+        _onSearchFind: function (d) {
+            var ok = false, hit;
+            try {
+                var candidates = _.isArray(d.candidates) ? d.candidates : [];
+                if (this.api) {
+                    for (var i = 0; i < candidates.length && !ok; i++) {
+                        var text = candidates[i];
+                        if (typeof text !== 'string' || !text.trim()) continue;
+                        var settings = new AscCommon.CSearchSettings();
+                        settings.put_Text(text.trim());
+                        settings.put_MatchCase(false);
+                        settings.put_WholeWords(false);
+                        if (this.api.asc_findText(settings, true)) { ok = true; hit = text; }
+                    }
+                }
+            } catch (e) { ok = false; }
+            if (typeof d.requestId === 'string') this._post({ type: 'search:found', requestId: d.requestId, ok: ok, text: hit });
+        },
+
         _post: function (msg) {
             var origin = this.parentOrigin();
             if (!origin || window.parent === window) return;
@@ -152,6 +177,10 @@ define([
                 if (!d || d.__tl !== CHANNEL) return;
                 if (typeof d.type === 'string' && d.type.indexOf('anchors:') === 0) {
                     me._onAnchorMessage(d);
+                    return;
+                }
+                if (d.type === 'search:find') {
+                    me._onSearchFind(d);
                     return;
                 }
                 if (d.type !== 'descriptor') return;
