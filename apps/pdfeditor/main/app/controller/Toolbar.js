@@ -1559,6 +1559,19 @@ define([
                 }
             }
 
+            // top.legal — host-driven ribbon tabs (Negotiation, Tasks, Ask AI, ...), same controller
+            // protocol as the Word editor. Not gated on isEdit: a read-only PDF still needs the Tasks
+            // tab. Renders nothing until the dealroom sends a descriptor.
+            var negotiationtab = me.getApplication().getController('NegotiationTab');
+            if ( negotiationtab ) {
+                negotiationtab.setApi(me.api).setConfig({toolbar: me, mode: config});
+                var $negPanel = negotiationtab.createToolbarPanel();
+                if ($negPanel) {
+                    me.toolbar.addTab({action: 'negotiation', caption: 'Negotiation', layoutname: 'toolbar-negotiation', dataHintTitle: 'N'}, $negPanel, 1);
+                    me.toolbar.setVisible('negotiation', true);
+                }
+            }
+
             var tab = {caption: me.toolbar.textTabView, action: 'view', extcls: config.isEdit ? 'canedit' : '', layoutname: 'toolbar-view', dataHintTitle: 'W'};
             var viewtab = me.getApplication().getController('ViewTab');
             viewtab.setApi(me.api).setConfig({toolbar: me, mode: config});

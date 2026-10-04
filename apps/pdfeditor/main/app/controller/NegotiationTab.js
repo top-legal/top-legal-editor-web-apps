@@ -1,0 +1,558 @@
+/*
+ * top.legal — host-driven ribbon tabs (native), PDF editor build
+ * Copy of documenteditor/main/app/controller/NegotiationTab.js with the Word-only anchor code
+ * replaced by stubs and tab positions read from the live ribbon. Keep the two in step.
+ * ------------------------------------------------------------------
+ * One or more ribbon tabs that render whatever the host dealroom tells them to, and report
+ * activations back. They contain NO business logic: no turns, no modes, no contracts, and nothing
+ * that knows what any particular tab is for.
+ *
+ * The filename and the controller id are historical — this began as a single "Negotiation" tab.
+ * They are kept because renaming them would touch app.js and Toolbar.js for no functional gain,
+ * and every file this fork adds has to be re-applied as an overlay on each image build.
+ *
+ * Why: this file lives in the DocumentServer image, and changing that image costs a ~26 minute
+ * CodeBuild plus a container swap that interrupts dev, beta and prod together (one container
+ * serves all three). So the image gets a fixed widget vocabulary — chip, button, segmented,
+ * select — and everything that actually changes (labels, ordering, which controls exist, when
+ * they are disabled, translations) arrives at runtime as a descriptor from the app, shipped with
+ * an ordinary frontend deploy. A rebuild is then only needed to add a widget TYPE.
+ *
+ * The app remains the single implementation of the business logic: this tab emits intents
+ * ('finishTurn'), never outcomes, and the dealroom's existing mutations run unchanged. That is
+ * what keeps this tab and the dealroom's own MUI strip from drifting — they are two renderings
+ * of one state machine.
+ *
+ * Deliberately NOT gated on config.isEdit (unlike the Style tab). In turn-based negotiation the
+ * party without the turn is served a READ-ONLY frozen snapshot, and that is exactly the person
+ * who needs to see whose turn it is.
+ *
+ * Wire protocol (both directions carry __tl so unrelated traffic is ignored cheaply):
+ *   app  -> tab : { __tl:'tl-office-ribbon', type:'descriptor',
+ *                   payload:{ version, tabs:[{id,label,controls}], tab, controls, style?, css? } }
+ *   tab  -> app : { __tl:'tl-office-ribbon', type:'ready' }
+ *   tab  -> app : { __tl:'tl-office-ribbon', type:'action', id, value? }
+ *
+ * CONTEXT MENU. `contextMenu: [{id, label}]` (optional, additive — no version bump) declares an
+ * entry for the right-click menu, shown under "Add comment". The first three entries are used. A click
+ * is reported as an ordinary `action` with that id, so the host handles it like a ribbon button.
+ *
+ * ANCHORS (same channel, `anchors:*` types) — text ranges the host can attach things to, used for
+ * tasks. See the "Anchors" section below for the messages and why they are built this way.
+ *
+ * TABS. `tabs` is the current shape; `tab`/`controls` are the original single-tab shape and are
+ * still accepted, because an app deployed against this image may predate the change. The first
+ * entry in `tabs` is the PRIMARY tab: Toolbar.js builds its panel during toolbar construction,
+ * before any descriptor can have arrived. Every later entry is created lazily, the first time a
+ * descriptor names it — Mixtbar.addTab is pure DOM plus a config splice and re-syncs its own
+ * element caches, so it is safe to call after the toolbar is up.
+ *
+ * Tabs are never removed once created. A descriptor that stops naming a tab simply leaves it
+ * empty: tearing tabs out of a live ribbon risks orphaning the active panel, and no host has
+ * wanted it.
+ */
+define([
+    'core'
+], function () {
+    'use strict';
+
+    PDFE.Controllers = PDFE.Controllers || {};
+
+    var CHANNEL = 'tl-office-ribbon';
+    var SUPPORTED_VERSION = 1;
+    // The tab Toolbar.js builds during toolbar construction. Must match tabs[0].id from the host.
+    var PRIMARY_TAB_ID = 'negotiation';
+    // Where the primary tab sits in Mixtbar's tab list. Toolbar.js inserts it with after=1, and
+    // addTab splices at after+1, so it lands at index 2 and extra tabs follow at 2, 3, ...
+    //
+    // This mirrors an insertion index rather than reading one back, because Mixtbar keeps its tab
+    // config in a closure. If the assumption is ever wrong (Style absent in a read-only session,
+    // say), addTab walks back to the nearest real tab and inserts there: the extra tab lands in a
+    // different POSITION, never in a broken state.
+    var PRIMARY_TAB_AFTER = 1;
+
+    PDFE.Controllers.NegotiationTab = Backbone.Controller.extend(_.extend({
+        models: [],
+        collections: [],
+        views: [],
+
+        descriptor: null,
+
+        initialize: function () {
+            this.addListeners({});
+        },
+
+        onLaunch: function () {
+            this._panel = null;
+        },
+
+        setApi: function (api) {
+            this.api = api;
+            // Called from Toolbar.js mid-construction: an exception here would abort the toolbar
+            // build, so anchors fail alone (see DocumentEdits.js for the incident that taught this).
+            try { this._bindAnchorEvents(); } catch (e) { /* anchors unavailable, editor unaffected */ }
+            return this;
+        },
+
+        setConfig: function (config) {
+            this.toolbar = config.toolbar;
+            // config.toolbar is the Toolbar CONTROLLER; its own `.toolbar` is the Mixtbar view
+            // that owns addTab/setVisible. Reached defensively: a future upstream reshuffle here
+            // must cost us extra tabs, not the primary one.
+            this.toolbarView = (config.toolbar && config.toolbar.toolbar) || null;
+            this.appConfig = config.mode;
+            return this;
+        },
+
+        // ===============================================================
+        // Host messaging
+        // ===============================================================
+
+        // DocsAPI puts the embedding page's origin on the editor URL, so we can pin the target
+        // rather than posting to '*' — the descriptor carries contract state and this frame is
+        // cross-origin from the dealroom.
+        parentOrigin: function () {
+            if (this._parentOrigin !== undefined) return this._parentOrigin;
+            var p = null;
+            try {
+                p = new URLSearchParams(window.location.search).get('parentOrigin');
+            } catch (e) { p = null; }
+            this._parentOrigin = p || null;
+            return this._parentOrigin;
+        },
+
+        contextMenuItem: function (index) {
+            var list = this.descriptor && this.descriptor.contextMenu;
+            var c = Array.isArray(list) ? list[index || 0] : null;
+            if (!c || typeof c.id !== 'string' || typeof c.label !== 'string' || !c.label) return null;
+            return { id: c.id, label: c.label };
+        },
+
+        contextMenuAction: function (id) {
+            if (typeof id === 'string' && id) this._post({ type: 'action', id: id });
+        },
+
+        _post: function (msg) {
+            var origin = this.parentOrigin();
+            if (!origin || window.parent === window) return;
+            msg.__tl = CHANNEL;
+            window.parent.postMessage(msg, origin);
+        },
+
+        _listen: function () {
+            var me = this;
+            if (me._listening) return;
+            me._listening = true;
+            window.addEventListener('message', function (e) {
+                // Two independent checks: the origin must be the embedding page, and the message
+                // must actually come from it — origin alone would accept a same-origin subframe.
+                if (!me.parentOrigin() || e.origin !== me.parentOrigin()) return;
+                if (e.source !== window.parent) return;
+                var d = e.data;
+                if (!d || d.__tl !== CHANNEL) return;
+                if (typeof d.type === 'string' && d.type.indexOf('anchors:') === 0) {
+                    me._onAnchorMessage(d);
+                    return;
+                }
+                if (d.type !== 'descriptor') return;
+                var payload = d.payload;
+                // An app newer than this image may speak a shape we cannot draw. Declining is
+                // better than rendering it half-right: the dealroom strip is still there.
+                if (!payload || payload.version !== SUPPORTED_VERSION) return;
+                me.descriptor = payload;
+                me._render();
+            });
+        },
+
+        // ===============================================================
+        // Panel (ribbon content)
+        // ===============================================================
+        /**
+         * Build the PRIMARY tab's panel. Called once by Toolbar.js while the toolbar is being
+         * constructed, long before any descriptor exists — which is exactly why the primary tab
+         * cannot be descriptor-declared like the others.
+         */
+        createToolbarPanel: function () {
+            var me = this;
+            me._injectStyles();
+            me._panels = {};
+            me._panel = me._makePanel(PRIMARY_TAB_ID);
+            me._render();       // empty state until the host sends a descriptor
+            me._listen();
+            // The host may have been ready long before this tab was built (and rebuilds it on
+            // every remount), so ask rather than wait to be told.
+            me._post({ type: 'ready' });
+            return me._panel;
+        },
+
+        /**
+         * The panel markup for one tab. `id` is constrained by the host to [a-z][a-z0-9]* — it is
+         * interpolated into markup and, in the app's own CSS, into an attribute selector.
+         */
+        _makePanel: function (id) {
+            var $panel = $(
+                '<section class="panel" data-tab="' + id + '" role="tabpanel" aria-labelledby="' + id + '">' +
+                    '<div class="group eo-neg-group">' +
+                        '<div class="eo-neg-controls"></div>' +
+                    '</div>' +
+                '</section>'
+            );
+            this._panels[id] = { $panel: $panel, $controls: $panel.find('.eo-neg-controls') };
+            if (id === PRIMARY_TAB_ID) this.$controls = this._panels[id].$controls;
+            return $panel;
+        },
+
+        /**
+         * Create a ribbon tab that did not exist at toolbar-build time.
+         *
+         * Wrapped in try/catch on purpose: Mixtbar is upstream code we overlay rather than own, and
+         * an extra tab failing to appear must never take the editor — or the primary tab — with it.
+         */
+        _ensureTab: function (id, label, position) {
+            var me = this;
+            if (me._panels[id]) return true;
+            if (!me.toolbarView || typeof me.toolbarView.addTab !== 'function') return false;
+
+            try {
+                var $panel = me._makePanel(id);
+                me.toolbarView.addTab(
+                    { action: id, caption: label || id, layoutname: 'toolbar-' + id, dataHintTitle: (label || id).charAt(0) },
+                    $panel,
+                    position
+                );
+                if (typeof me.toolbarView.setVisible === 'function') me.toolbarView.setVisible(id, true);
+                return true;
+            } catch (e) {
+                delete me._panels[id];
+                return false;
+            }
+        },
+
+        /**
+         * Where extra tabs go. The PDF editor adds Insert/Redact/Forms at fixed indexes AFTER our
+         * primary tab exists (and again on every edit-mode switch), so the primary tab's position is
+         * read from the DOM instead of assumed. Falls back to the Word value.
+         */
+        _primaryAfter: function () {
+            try {
+                var $li = $('.toolbar .tabs a[data-tab="' + PRIMARY_TAB_ID + '"]').closest('li');
+                var idx = $li.length ? $li.parent().children('li').index($li) : -1;
+                if (idx > 0) return idx - 1;
+            } catch (e) { /* fall through */ }
+            return PRIMARY_TAB_AFTER;
+        },
+
+        getButtons: function () { return []; },
+
+        _injectStyles: function () {
+            if (document.getElementById('eo-neg-tab-css')) return;
+            // Intentionally small. The buttons themselves are upstream's `btn-toolbar x-huge`, so
+            // their sizing, hover, active and disabled states — and every UI theme — come from
+            // buttons.less. Restyling them here is what made the tab look foreign in the first
+            // place, so this sheet now only covers what upstream has no rule for: our SVG glyph,
+            // the status chip, and group layout.
+            var css =
+                // flex:1 on BOTH is what makes margin-left:auto work on the status chip. Without it
+                // these shrink-wrap their content, there is no free space in the row, and the chip
+                // just sits next to the last button instead of at the edge.
+                '.eo-neg-group{display:flex;align-items:stretch;height:100%;flex:1 1 auto;overflow:hidden;}' +
+                '.eo-neg-controls{display:flex;align-items:stretch;overflow-x:auto;overflow-y:hidden;width:100%;flex:1 1 auto;height:100%;box-sizing:border-box;}' +
+                '.eo-neg-seg-group{display:flex;align-items:stretch;}' +
+                // Matches the sprite glyphs upstream draws in .inner-box-icon on an x-huge button.
+                // 20px inside upstream's 28px .inner-box-icon box, exactly like the sprite glyphs
+                // (buttons.less: div.inner-box-icon{height:28px} with a 20px icon). At 28px the
+                // glyph filled the whole box and pushed the caption out of the panel, which is
+                // why the labels were clipped.
+                '.eo-neg-ico{width:var(--eo-neg-icon-size,20px);height:var(--eo-neg-icon-size,20px);display:block;margin:0 auto;}' +
+                // The chip is a status readout, not a control, so it is centred against the tall
+                // button row rather than stretched to it.
+                // margin-left:auto pushes the status to the far right of the ribbon row; the app also
+                // emits it last so nothing sits between it and the edge.
+                '.eo-neg-chip{align-self:center;margin-left:auto;flex:0 0 auto;display:inline-flex;align-items:center;' +
+                    'font-size:11px;font-weight:bold;border-radius:999px;padding:3px 12px;margin-right:12px;white-space:nowrap;}' +
+                '.eo-neg-chip.green{background:#3DBD7D;color:#fff;}' +
+                '.eo-neg-chip.grey{background:#eceff1;color:#4a5568;}' +
+                '.eo-neg-chip.amber{background:#ffaa00;color:#fff;}' +
+                '.eo-neg-sel{align-self:center;flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#909090;margin:0 8px;}' +
+                '.eo-neg-sel select{font-size:11px;padding:4px 6px;border:1px solid #cfcfcf;border-radius:3px;background:#fff;color:#363636;max-width:200px;}' +
+                '.eo-neg-empty{align-self:center;font-size:11px;color:#909090;padding:0 8px;}';
+            var st = document.createElement('style');
+            st.id = 'eo-neg-tab-css';
+            st.type = 'text/css';
+            st.innerHTML = css;
+            document.getElementsByTagName('head')[0].appendChild(st);
+        },
+
+        // ===============================================================
+        // Rendering — one branch per widget type. Adding a type here is the
+        // only change that requires rebuilding the image.
+        // ===============================================================
+        /**
+         * Normalise whichever descriptor shape arrived into one list of tabs.
+         *
+         * `tabs` is the current shape. `tab`/`controls` is the original single-tab one, still
+         * accepted because the app and this image are deployed independently — one container
+         * serves dev, beta and prod, so there is always a window where an older app is talking to
+         * a newer image.
+         */
+        _tabsOf: function (d) {
+            if (!d) return [];
+            if (Array.isArray(d.tabs) && d.tabs.length) {
+                return d.tabs.filter(function (tabSpec) {
+                    // The id reaches markup and an attribute selector; anything else is dropped
+                    // rather than sanitised, so a malformed descriptor cannot inject either.
+                    return tabSpec && typeof tabSpec.id === 'string' && /^[a-z][a-z0-9]*$/i.test(tabSpec.id);
+                });
+            }
+            return [{ id: PRIMARY_TAB_ID, label: null, controls: d.controls || [] }];
+        },
+
+        _render: function () {
+            var me = this;
+            if (!me._panels || !me.$controls) return;
+
+            me._applyStyle();
+
+            var tabs = me._tabsOf(me.descriptor);
+            var extraIndex = 0;
+
+            tabs.forEach(function (tabSpec) {
+                if (tabSpec.id !== PRIMARY_TAB_ID) {
+                    extraIndex += 1;
+                    // Created once, then only re-rendered. A tab the host stops sending is left
+                    // in place and simply empties — see the TABS note in the file header.
+                    if (!me._ensureTab(tabSpec.id, tabSpec.label, me._primaryAfter() + extraIndex)) return;
+                }
+                var slot = me._panels[tabSpec.id];
+                if (slot) me._renderControls(slot.$controls, tabSpec.controls || []);
+                me._syncTabCaption(tabSpec.id, tabSpec.label);
+            });
+
+            // Tabs the descriptor no longer names keep their place but show the empty state, so a
+            // host that drops a tab mid-session leaves nothing stale on screen.
+            Object.keys(me._panels).forEach(function (id) {
+                var stillNamed = tabs.some(function (tabSpec) { return tabSpec.id === id; });
+                if (!stillNamed) me._renderControls(me._panels[id].$controls, []);
+            });
+        },
+
+        /**
+         * Keep a tab's caption in step with the descriptor. The primary tab is built by Toolbar.js
+         * with the literal caption 'Negotiation' before any descriptor exists, and extra tabs keep
+         * the label they were created with — so without this the primary tab was never translated.
+         * textContent (via .text), never markup: labels are host-supplied.
+         */
+        _syncTabCaption: function (id, label) {
+            if (typeof label !== 'string' || !label) return;
+            var $a = $('.toolbar .tabs a[data-tab="' + id + '"]');
+            if (!$a.length || $a.text() === label) return;
+            $a.text(label).attr('data-title', label);
+        },
+
+        /** One branch per widget type. Adding a TYPE here is the only change that needs a rebuild. */
+        _renderControls: function ($controls, controls) {
+            var me = this;
+            $controls.empty();
+
+            if (!controls.length) {
+                $controls.append($('<span class="eo-neg-empty"></span>').text('—'));
+                return;
+            }
+
+            controls.forEach(function (c) {
+                if (!c || !c.id || !c.type) return;
+                var $el = null;
+                if (c.type === 'chip')           $el = me._chip(c);
+                else if (c.type === 'button')    $el = me._button(c);
+                else if (c.type === 'segmented') $el = me._segmented(c);
+                else if (c.type === 'select')    $el = me._select(c);
+                if ($el) $controls.append($el);
+            });
+        },
+
+        /**
+         * Styling supplied by the HOST, so visual tweaks stop costing an image rebuild.
+         *
+         * Every size/spacing change so far has meant a ~25 min CodeBuild plus a container swap that
+         * interrupts all three stages. Reading them from the descriptor instead makes them ordinary
+         * frontend changes: instant locally, a pm2 reload to beta, and independent per stage.
+         *
+         * Two channels. `style` is a map of tokens applied as CSS custom properties on our own
+         * container — the safe, expected path, and the base sheet already reads them. `css` is an
+         * escape hatch for the unforeseen; it is injected into a single <style> element we own and
+         * rewrite, never appended to, so repeated renders cannot pile up sheets. Selectors there
+         * should stay scoped to .eo-neg-controls: nothing stops a stray rule reaching the rest of
+         * the editor, and that would be a nasty thing to debug from a screenshot.
+         */
+        _applyStyle: function () {
+            var d = this.descriptor || {};
+            var panels = this._panels || {};
+            if (d.style && typeof d.style === 'object') {
+                // Applied to EVERY host panel, not just the primary one: the tokens describe the
+                // shared widget vocabulary, so a button in one tab must not size differently
+                // from the same button in another.
+                Object.keys(panels).forEach(function (id) {
+                    var el = panels[id].$controls[0];
+                    if (!el) return;
+                    Object.keys(d.style).forEach(function (k) {
+                        // Token names are constrained so a descriptor cannot set arbitrary inline CSS.
+                        if (!/^[a-z0-9-]+$/i.test(k)) return;
+                        el.style.setProperty('--eo-neg-' + k, String(d.style[k]));
+                    });
+                });
+            }
+            var host = document.getElementById('eo-neg-host-css');
+            if (!host) {
+                host = document.createElement('style');
+                host.id = 'eo-neg-host-css';
+                host.type = 'text/css';
+                document.getElementsByTagName('head')[0].appendChild(host);
+            }
+            host.innerHTML = (typeof d.css === 'string') ? d.css : '';
+        },
+
+        // textContent everywhere, never .html(): labels are host-supplied strings and some are
+        // user-authored (workflow names), so they must never be parsed as markup.
+        _chip: function (c) {
+            var tone = (c.tone === 'green' || c.tone === 'amber') ? c.tone : 'grey';
+            var $chip = $('<span class="eo-neg-chip ' + tone + '"></span>').text(c.label || '');
+            if (c.hint) $chip.attr('title', c.hint);
+            return $chip;
+        },
+
+        /**
+         * A ribbon button in the editor's OWN idiom: icon above, caption below, no border, using
+         * upstream's `btn-toolbar x-huge` markup (templateHugeCaption in component/Button.js, and
+         * the `btn-slot text x-huge` slots in Toolbar.template).
+         *
+         * Reusing upstream classes rather than styling bespoke buttons means this tab inherits
+         * hover, active, disabled and every UI theme automatically, instead of drifting the first
+         * time someone switches to a dark theme. The only substitution is the glyph: upstream puts
+         * a sprite <i class="icon btn-..."> inside .inner-box-icon, we put our SVG there, because
+         * the sprite has no entry for these actions.
+         */
+        _ribbonButton: function (opts) {
+            var $slot = $('<div class="btn-slot text x-huge"></div>');
+            var $btn = $('<button type="button" class="btn btn-toolbar x-huge"></button>');
+            var $icon = $('<div class="inner-box-icon"></div>');
+            var ico = this._icon(opts.icon);
+            if (ico) $icon.append(ico);
+            $btn.append($icon);
+            $btn.append($('<div class="inner-box-caption"></div>').append($('<span class="caption"></span>').text(opts.label || '')));
+            // Native browser tooltip. Upstream's own buttons use data-hint + Common.UI.Tooltip,
+            // but that needs a component instance per button; title costs nothing, needs no
+            // wiring, and the text is host-supplied so it is already translated.
+            if (opts.hint) $btn.attr('title', opts.hint);
+            if (opts.active) $btn.addClass('active');
+            if (opts.disabled) $btn.addClass('disabled').prop('disabled', true);
+            $btn.on('click', function () {
+                if (opts.disabled) return;
+                opts.onClick();
+            });
+            $slot.append($btn);
+            return $slot;
+        },
+
+        _button: function (c) {
+            var me = this;
+            return me._ribbonButton({
+                label: c.label,
+                icon: c.icon,
+                hint: c.hint,
+                disabled: !!(c.disabled || c.busy),
+                onClick: function () { me._post({ type: 'action', id: c.id }); },
+            });
+        },
+
+        /**
+         * Icons arrive as GEOMETRY — { path, viewBox } — never as names: this file cannot import
+         * the app's icon set, and names would mean the image carrying a catalogue only a rebuild
+         * could extend.
+         *
+         * The viewBox must come from the descriptor rather than be assumed here. Material Symbols
+         * exports use a 960-unit `0 -960 960 960` box while Material Icons use `0 0 24 24`; a
+         * hardcoded box renders the other set as an empty square. Defaulting to 24 keeps older
+         * descriptors that sent a bare path string working.
+         *
+         * currentColor makes the glyph follow the button's own text colour, so it tracks hover,
+         * the active state and every UI theme without any rule of ours.
+         */
+        _icon: function (icon) {
+            if (!icon) return null;
+            var pathData = (typeof icon === 'string') ? icon : icon.path;
+            var viewBox = (typeof icon === 'object' && icon.viewBox) ? icon.viewBox : '0 0 24 24';
+            if (!pathData || typeof pathData !== 'string') return null;
+            var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('viewBox', viewBox);
+            svg.setAttribute('class', 'eo-neg-ico');
+            svg.setAttribute('aria-hidden', 'true');
+            var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            // setAttribute, not innerHTML — host-supplied, must never be parsed as markup.
+            path.setAttribute('d', pathData);
+            path.setAttribute('fill', 'currentColor');
+            svg.appendChild(path);
+            return svg;
+        },
+
+        // A run of ribbon buttons with the current one `.active` — how the editor expresses a
+        // mutually exclusive choice everywhere else (Display Mode, alignment). A bordered
+        // segmented pill would have been the only control of its kind in the whole ribbon.
+        _segmented: function (c) {
+            var me = this;
+            var $wrap = $('<div class="eo-neg-seg-group"></div>');
+            (c.options || []).forEach(function (o) {
+                $wrap.append(me._ribbonButton({
+                    label: o.label,
+                    icon: o.icon,
+                    hint: o.hint,
+                    active: o.value === c.value,
+                    disabled: !!(c.disabled || o.disabled),
+                    onClick: function () {
+                        if (o.value === c.value) return;
+                        me._post({ type: 'action', id: c.id, value: o.value });
+                    },
+                }));
+            });
+            $wrap.append($('<div class="separator long"></div>'));
+            return $wrap;
+        },
+
+        _select: function (c) {
+            var me = this;
+            var $wrap = $('<span class="eo-neg-sel"></span>');
+            if (c.label) $wrap.append($('<span></span>').text(c.label));
+            var $sel = $('<select></select>');
+            if (c.disabled) $sel.prop('disabled', true);
+            (c.options || []).forEach(function (o) {
+                var $o = $('<option></option>').attr('value', o.value).text(o.badge ? (o.label + ' • ' + o.badge) : o.label);
+                if (o.value === c.value) $o.prop('selected', true);
+                $sel.append($o);
+            });
+            $sel.on('change', function () {
+                me._post({ type: 'action', id: c.id, value: $sel.val() });
+            });
+            $wrap.append($sel);
+            return $wrap;
+        },
+
+        // ===============================================================
+        // Anchors — not available in the PDF editor
+        // ===============================================================
+        /*
+         * The Word build anchors tasks to hidden bookmarks; a PDF has no bookmarks or runs to mark.
+         * Requests are answered at once with "cannot anchor" so the host never waits on its timeout
+         * and creates the task unanchored. goto/set/remove are no-ops.
+         */
+        _bindAnchorEvents: function () {},
+
+        _onAnchorMessage: function (d) {
+            try {
+                if (d.type === 'anchors:capture' && typeof d.requestId === 'string' && d.requestId) {
+                    this._post({ type: 'anchors:captured', requestId: d.requestId, text: '', canAnchor: false });
+                } else if (d.type === 'anchors:create' && typeof d.name === 'string') {
+                    this._post({ type: 'anchors:created', name: d.name, ok: false, reason: 'noRange' });
+                }
+            } catch (e) { /* never take the editor down */ }
+        },
+    }, PDFE.Controllers.NegotiationTab || {}));
+});
