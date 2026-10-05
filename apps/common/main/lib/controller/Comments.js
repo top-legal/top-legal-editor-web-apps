@@ -427,7 +427,8 @@ define([
             if (this.collection) {
                 var sort = (type !== undefined);
                 if (type === undefined) {
-                    type = Common.localStorage.getItem(this.appPrefix + "comments-sort") || 'date-desc';
+                    // top.legal: Word and PDF comments default to reading order (top of the document first).
+                    type = Common.localStorage.getItem(this.appPrefix + "comments-sort") || ((this.isPDFEditor || this.appPrefix === 'de-') ? 'position-asc' : 'date-desc');
                 }
                 Common.localStorage.setItem(this.appPrefix + "comments-sort", type);
                 Common.Utils.InternalSettings.set(this.appPrefix + "comments-sort", type);
@@ -435,7 +436,9 @@ define([
                 if (type=='position-asc' || type=='position-desc') {
                     var direction = (type=='position-asc') ? 1 : -1;
                     this.collection.comparator = function (collection) {
-                        return direction * collection.get('position');
+                        var position = collection.get('position');
+                        // top.legal: comments without a spot (document-level; Word reports -1) go after the anchored ones.
+                        return (position === undefined || position === null || position < 0) ? Infinity : direction * position;
                     };
                 } else if (type=='author-asc' || type=='author-desc') {
                     var direction = (type=='author-asc') ? 1 : -1;
@@ -864,6 +867,22 @@ define([
             this.groupCollection[groupname].push(comment);
         },
 
+        // top.legal: reading-order key of a PDF comment's annotation — page, then top edge, then
+        // left edge (annotation rects are page points, top-left origin). undefined when the
+        // annotation cannot be resolved, which sorts it after the anchored comments.
+        eoPdfCommentPosition: function (id) {
+            try {
+                var doc = this.api && this.api.getPDFDoc && this.api.getPDFDoc(),
+                    annot = doc && doc.GetAnnotById(id),
+                    page = annot ? annot.GetPage() : -1,
+                    rect = annot && annot.GetRect();
+                if (page < 0 || !rect) return undefined;
+                return page * 1e7 + Math.max(0, Math.min(9999, Math.round(rect[1]))) * 1e3 + Math.max(0, Math.min(999, Math.round(rect[0])));
+            } catch (e) {
+                return undefined;
+            }
+        },
+
         // SDK
 
         onApiAddComment: function (id, data) {
@@ -894,7 +913,7 @@ define([
                 } else
                     this.collection.push(comment);
 
-                this.updateComments(true, this.getComparator() === 'position-asc' || this.getComparator() === 'position-desc'); // don't sort by position
+                this.updateComments(true, !this.isPDFEditor && (this.getComparator() === 'position-asc' || this.getComparator() === 'position-desc')); // don't sort by position (PDF: position is known up front)
 
                 if (this.showPopover) {
                     if (null !== data.asc_getQuoteText()) {
@@ -915,7 +934,7 @@ define([
                 var comment = this.readSDKComment(data[i].asc_getId(), data[i], requestObj);
                 comment.get('groupName') ? this.addCommentToGroupCollection(comment) : this.collection.push(comment);
             }
-            this.updateComments(true, this.getComparator() === 'position-asc' || this.getComparator() === 'position-desc');
+            this.updateComments(true, !this.isPDFEditor && (this.getComparator() === 'position-asc' || this.getComparator() === 'position-desc'));
             requestObj.arrIds && requestObj.arrIds.length && Common.UI.ExternalUsers.get('info', requestObj.arrIds);
         },
         onApiRemoveComment: function (id, silentUpdate) {
@@ -1564,7 +1583,9 @@ define([
                 hide                : !AscCommon.UserInfoParser.canViewComment(data.asc_getUserName()),
                 hint                : !this.mode.canComments,
                 fullInfoInHint      : this.fullInfoHintMode,
-                groupName           : (groupname && groupname.length>1) ? groupname[1] : null
+                groupName           : (groupname && groupname.length>1) ? groupname[1] : null,
+                position            : this.isPDFEditor ? this.eoPdfCommentPosition(id)
+                                    : (this.appPrefix === 'de-' && this.api.asc_GetCommentLogicPosition ? this.api.asc_GetCommentLogicPosition(id) : undefined)
             });
             if (comment) {
                 if (!comment.get('hide')) {

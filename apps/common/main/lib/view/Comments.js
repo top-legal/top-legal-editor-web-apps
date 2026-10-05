@@ -361,7 +361,7 @@ define([
                                 caption: this.mniDateDesc,
                                 value: 'date-desc',
                                 checkable: true,
-                                checked: (Common.localStorage.getItem(this.appPrefix + "comments-sort") || 'date-desc') === 'date-desc',
+                                checked: (Common.localStorage.getItem(this.appPrefix + "comments-sort") || ((window.PDFE || this.appPrefix==='de-') ? 'position-asc' : 'date-desc')) === 'date-desc',
                                 toggleGroup: 'sortcomments'
                             },
                             {
@@ -389,15 +389,15 @@ define([
                                 caption: this.mniPositionAsc,
                                 value: 'position-asc',
                                 checkable: true,
-                                visible: this.appPrefix==='de-',
-                                checked: Common.localStorage.getItem(this.appPrefix + "comments-sort") === 'position-asc',
+                                visible: this.appPrefix==='de-' || !!window.PDFE,
+                                checked: (Common.localStorage.getItem(this.appPrefix + "comments-sort") || ((window.PDFE || this.appPrefix==='de-') ? 'position-asc' : 'date-desc')) === 'position-asc',
                                 toggleGroup: 'sortcomments'
                             },
                             {
                                 caption: this.mniPositionDesc,
                                 value: 'position-desc',
                                 checkable: true,
-                                visible: this.appPrefix==='de-',
+                                visible: this.appPrefix==='de-' || !!window.PDFE,
                                 checked: Common.localStorage.getItem(this.appPrefix + "comments-sort") === 'position-desc',
                                 toggleGroup: 'sortcomments'
                             },
