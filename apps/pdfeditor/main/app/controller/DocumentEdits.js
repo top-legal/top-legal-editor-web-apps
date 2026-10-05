@@ -279,16 +279,61 @@ define([
             if (typeof anchor !== 'string' || !anchor.length || anchor.length > MAX_ANCHOR_CHARS) return 'error';
             if (!edit.reason) return 'error';
 
-            var settings = new AscCommon.CSearchSettings();
-            settings.put_Text(anchor);
-            settings.put_MatchCase(true);
-            settings.put_WholeWords(false);
-            if (!this.api.asc_findText(settings, true)) return 'not_found';
+            if (!this._find(anchor)) {
+                // The quote may differ from the editor's text only in spacing — justified PDF lines
+                // come out of the editor's extraction with DOUBLE spaces between words ("and  interest
+                // in  and  to"), while the quote has single ones. Look the quote up in the editor's
+                // own lines with whitespace collapsed, and search with the editor's exact wording.
+                var exact = this._editorWording(anchor);
+                if (!exact || !this._find(exact)) return 'not_found';
+            }
 
             var quadsByPage = this._matchQuads();
             if (!quadsByPage) return 'not_found';
 
             return this._addAiHighlight(quadsByPage, edit.reason) ? true : 'error';
+        },
+
+        _find: function (text) {
+            var settings = new AscCommon.CSearchSettings();
+            settings.put_Text(text);
+            settings.put_MatchCase(true);
+            settings.put_WholeWords(false);
+            return !!this.api.asc_findText(settings, true);
+        },
+
+        /**
+         * The editor's own text for `quote`, matched with all whitespace runs collapsed to one
+         * space, or null. Lines are joined with a space, as the editor's multi-line search joins
+         * them. Only spacing is forgiven — case and every other character must still match.
+         */
+        _editorWording: function (quote) {
+            var engine = this.api.getPDFDoc().SearchEngine;
+            var pages = (engine && engine.PagesLines) || {};
+            var needle = String(quote).replace(/\s+/g, ' ').trim();
+            if (!needle) return null;
+
+            var pageKeys = _.keys(pages);
+            for (var k = 0; k < pageKeys.length; k += 1) {
+                var lines = pages[pageKeys[k]] || [];
+                var raw = '', folded = '', map = [];
+                for (var li = 0; li < lines.length; li += 1) {
+                    var line = (li ? ' ' : '') + String(lines[li]);
+                    for (var ci = 0; ci < line.length; ci += 1) {
+                        var ch = line.charAt(ci);
+                        raw += ch;
+                        if (/\s/.test(ch)) {
+                            if (folded.length && folded.charAt(folded.length - 1) !== ' ') { folded += ' '; map.push(raw.length - 1); }
+                        } else {
+                            folded += ch;
+                            map.push(raw.length - 1);
+                        }
+                    }
+                }
+                var at = folded.indexOf(needle);
+                if (at >= 0) return raw.slice(map[at], map[at + needle.length - 1] + 1);
+            }
+            return null;
         },
 
         /**
