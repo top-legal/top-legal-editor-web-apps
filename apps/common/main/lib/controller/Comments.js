@@ -875,7 +875,12 @@ define([
                 // top.legal: brand-new comment by me with no scope yet -> apply the scope the
                 // user chose in the add form (captured in _eoCurrentScope) and persist it,
                 // regardless of which add path created the comment.
-                if (comment.get('userid') == this.currentUserId
+                // NOT in the PDF editor: there a comment's userData is overwritten with its
+                // annotation id, so the stamp never sticks — each asc_changeComment re-creates the
+                // comment, which fires this handler again, until the stack overflows. PDF scope
+                // rides on the author name group (eoGroupUserName) instead.
+                if (!this.isPDFEditor
+                    && comment.get('userid') == this.currentUserId
                     && (data.asc_getUserData() || '').indexOf('eoScope') < 0
                     && this._eoCurrentScope && this._eoCurrentScope !== 'shared') {
                     comment.set('eoScope', this._eoCurrentScope, { silent: true });

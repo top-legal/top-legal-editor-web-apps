@@ -36,6 +36,11 @@ define([
     // Anchors are meant to be the shortest unambiguous quote. A very long one is a bug upstream,
     // and searching for it is slow, so it is rejected as malformed rather than attempted.
     var MAX_ANCHOR_CHARS = 600;
+    // Search geometry is in millimetres, annotation quads in PDF points.
+    var MM_TO_PT = 72 / 25.4;
+    // The marker yellow reviewers use, translucent so the quoted words stay readable.
+    var HIGHLIGHT_RGB = [1, 0.85, 0.2];
+    var HIGHLIGHT_OPACITY = 0.5;
 
     PDFE.Controllers.DocumentEdits = Backbone.Controller.extend(_.extend({
         models: [],
@@ -258,13 +263,14 @@ define([
         /**
          * Apply one edit. Returns true, or a failure reason string.
          *
-         * ORDER MATTERS: find, then comment, then replace.
+         * A PDF comment here is a HIGHLIGHT annotation over the quoted words, carrying the comment
+         * as its contents — the same object a reviewer creates by selecting text and commenting.
          *
-         * The find leaves the match SELECTED, which is what both the comment and the replace act
-         * on. Commenting before the replace is deliberate — it anchors to a range we know exists at
-         * that moment, and the editor carries the anchor across the subsequent edit. Doing it the
-         * other way round would mean commenting on whatever the replace happened to leave selected,
-         * which is not specified anywhere we control.
+         * WHY NOT asc_addComment (the documenteditor path). In the PDF editor it ignores the search
+         * match entirely: CPDFDoc.AddComment drops a sticky note at the last mouse position or at a
+         * fixed (10,10) on the current page. And a search leaves no text selection behind
+         * (getSelectionQuads() is empty), so the editor's own highlighter has nothing to work on
+         * either. The match's geometry is read from the search engine instead.
          */
         _applyOne: function (edit) {
             var anchor = edit.anchor;
@@ -277,35 +283,81 @@ define([
             settings.put_Text(anchor);
             settings.put_MatchCase(true);
             settings.put_WholeWords(false);
-            // Leaves the match selected, which is what asc_addComment anchors to.
             if (!this.api.asc_findText(settings, true)) return 'not_found';
 
-            return this._addAiComment(edit.reason) ? true : 'error';
+            var quadsByPage = this._matchQuads();
+            if (!quadsByPage) return 'not_found';
+
+            return this._addAiHighlight(quadsByPage, edit.reason) ? true : 'error';
         },
 
-        _addAiComment: function (reason) {
+        /**
+         * The current search match as highlight quads, grouped by page, or null.
+         *
+         * A match is a list of line segments ({PageNum, X, Y, W, H}, millimetres from the page's
+         * top-left) — one per line for a quote that wraps. Quads are PDF points, the unit
+         * getSelectionQuads() produces from a hand-made selection; converting with mm→pt yields
+         * the identical rectangle (checked against a real selection of the same words).
+         */
+        _matchQuads: function () {
+            var engine = this.api.getPDFDoc().SearchEngine;
+            var match = engine && engine.Elements && (engine.Elements[engine.CurId] || engine.Elements[0]);
+            if (!match || !match.length) return null;
+
+            var byPage = {};
+            for (var i = 0; i < match.length; i += 1) {
+                var seg = match[i];
+                if (!seg || !(seg.W > 0) || !(seg.H > 0)) continue;
+                var x1 = seg.X * MM_TO_PT, y1 = seg.Y * MM_TO_PT;
+                var x2 = (seg.X + seg.W) * MM_TO_PT, y2 = (seg.Y + seg.H) * MM_TO_PT;
+                (byPage[seg.PageNum] = byPage[seg.PageNum] || []).push([x1, y1, x2, y1, x1, y2, x2, y2]);
+            }
+            return _.isEmpty(byPage) ? null : byPage;
+        },
+
+        /**
+         * One highlight per page the match touches, inside one undoable action (the same
+         * DoAction + historydescription_Pdf_AddAnnot the editor's own marker tool uses, so it is
+         * saved and co-edited like any hand-made highlight).
+         *
+         * Scope rides on the AUTHOR name (eoGroupUserName): in a PDF the comment's userData is the
+         * annotation id, so the userData scope stamp used in Word cannot be stored here.
+         */
+        _addAiHighlight: function (quadsByPage, reason) {
             try {
                 var comments = this.getApplication().getController('Common.Controllers.Comments');
                 if (!comments) return false;
+                var oDoc = this.api.getPDFDoc();
+                var author = comments.eoGroupUserName(AI_COMMENT_SCOPE, AI_AUTHOR);
+                var userId = comments.currentUserId;
+                var text = String(reason);
 
-                // Mirrors Comments.js's own buildCommentData(): the document editor needs the Word
-                // subclass, and the base class is only a fallback. That helper is module-private
-                // there, so the two-line check is repeated rather than reached for.
-                var comment = (typeof Asc.asc_CCommentDataWord !== 'undefined')
-                    ? new Asc.asc_CCommentDataWord(null)
-                    : new Asc.asc_CCommentData(null);
-                comment.asc_putText(String(reason));
-                comment.asc_putTime(comments.utcDateToString(new Date()));
-                comment.asc_putOnlyOfficeTime(comments.ooDateToString(new Date()));
-                // Attribution by NAME, ownership by ID. The signed-in user's id is used on purpose:
-                // it is what lets them resolve or delete the comment. An invented author id would
-                // make the assistant's own annotations undeletable by the person reviewing them.
-                comment.asc_putUserId(comments.currentUserId);
-                comment.asc_putSolved(false);
-                comment.asc_putUserData(comments.eoEncodeScope(comment.asc_getUserData(), AI_COMMENT_SCOPE));
-                comment.asc_putUserName(comments.eoGroupUserName(AI_COMMENT_SCOPE, AI_AUTHOR));
+                oDoc.DoAction(function () {
+                    _.each(quadsByPage, function (quads, page) {
+                        var xs = [], ys = [];
+                        _.each(quads, function (q) { xs.push(q[0], q[2]); ys.push(q[1], q[5]); });
+                        var now = new Date().getTime();
+                        var annot = oDoc.AddAnnotByProps({
+                            rect: [_.min(xs) - 1, _.min(ys) - 1, _.max(xs) + 1, _.max(ys) + 1],
+                            page: Number(page),
+                            name: AscCommon.CreateGUID(),
+                            type: AscPDF.ANNOTATIONS_TYPES.Highlight,
+                            creationDate: now,
+                            modDate: now,
+                            hidden: false
+                        });
+                        if (!annot) throw new Error('annotation not created');
+                        annot.SetQuads(quads);
+                        annot.SetBorderColor(HIGHLIGHT_RGB);
+                        annot.SetOpacity(HIGHLIGHT_OPACITY);
+                        // Ownership by the signed-in user's id, so they can resolve or delete it.
+                        annot.SetAuthor(author);
+                        annot.SetUserId(userId);
+                        annot.SetContents(text);
+                    });
+                }, AscDFH.historydescription_Pdf_AddAnnot, oDoc);
 
-                this.api.asc_addComment(comment);
+                if (this.api.asc_endFindText) this.api.asc_endFindText();
                 return true;
             } catch (e) {
                 return false;
