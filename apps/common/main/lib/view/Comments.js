@@ -321,6 +321,10 @@ define([
 
             this.showCommentToDocAtBottom = false;
             !this.showCommentToDocAtBottom && (this.addCommentHeight = 0);
+
+            // top.legal: @-mention picker in the panel (upstream only has it in ReviewPopover)
+            this._mentionState = {};
+            Common.NotificationCenter.on('mentions:setusers', _.bind(this.onEmailListMenuCallback, this));
         },
 
         render: function () {
@@ -503,6 +507,7 @@ define([
                         event.preventDefault();
                     }
                 });
+                this.bindMentions(this.txtComment);
             }
 
             if (this.commentsView) {
@@ -659,6 +664,224 @@ define([
                     event.preventDefault();
                 }
             });
+            this.bindMentions(textBox);
+        },
+
+        bindMentions: function (textBox) {
+            var me = this;
+            if (!textBox || !textBox.length) return;
+
+            textBox.off('.eomention');
+            textBox.on('keydown.eomention', function (event) {
+                if (!(me.mode && me.mode.canRequestUsers)) return;
+                if ( event.keyCode == Common.UI.Keys.SPACE || event.keyCode === Common.UI.Keys.TAB ||
+                    event.keyCode == Common.UI.Keys.HOME || event.keyCode == Common.UI.Keys.END || event.keyCode == Common.UI.Keys.RIGHT ||
+                    event.keyCode == Common.UI.Keys.LEFT || event.keyCode == Common.UI.Keys.UP || event.keyCode == Common.UI.Keys.ESC) {
+                    me.onEmailListMenu();
+                } else if (event.keyCode == Common.UI.Keys.DOWN) {
+                    if (me.emailMenu && me.emailMenu.rendered && me.emailMenu.isVisible()) {
+                        _.delay(function () {
+                            me.emailMenu.cmpEl.find('li:not(.divider):first a').focus();
+                        }, 10);
+                        event.preventDefault();
+                    }
+                }
+            });
+            textBox.on('input.eomention', function () {
+                if (!(me.mode && me.mode.canRequestUsers)) return;
+                clearTimeout(me._mentionState.timerEmailList);
+
+                var $this = $(this),
+                    start = this.selectionStart,
+                    val = $this.val(),
+                    left = 0, right = val.length-1;
+                for (var i=start-1; i>=0; i--) {
+                    var c = val.charCodeAt(i);
+                    if (c == 32 || c == 13 || c == 10 || c == 9) { left = i+1; break; }
+                }
+                for (var j=start; j<=right; j++) {
+                    var d = val.charCodeAt(j);
+                    if (d == 32 || d == 13 || d == 10 || d == 9) { right = j-1; break; }
+                }
+                var str = val.substring(left, right+1),
+                    res = str.match(/^(?:[@]|[+](?!1))(\S*)/);
+                if (res && res.length>1) {
+                    var box = $this;
+                    me._mentionState.timerEmailList = setTimeout(function () {
+                        me.onEmailListMenu(res[1], left, right, box);
+                    }, 300);
+                } else
+                    me.onEmailListMenu();
+            });
+            textBox.on('blur.eomention', function () {
+                // keep the menu while focus moves into it (arrow-down / click)
+                setTimeout(function () {
+                    var menu = me.emailMenu;
+                    if (menu && menu.rendered && !$.contains(menu.cmpEl[0], document.activeElement) && !textBox.is(':focus'))
+                        me.onEmailListMenu();
+                }, 200);
+            });
+        },
+
+        getEmailMenu: function () {
+            var me = this;
+            if (!this.emailMenu) {
+                this.emailMenu = new Common.UI.Menu({
+                    maxHeight: 200,
+                    cyclic: false,
+                    cls: 'font-size-medium',
+                    items: []
+                }).on('render:after', function () {
+                    this.scroller = new Common.UI.Scroller({
+                        el: $(this.el).find('.dropdown-menu '),
+                        useKeyboard: this.enableKeyEvents && !this.handleSelect,
+                        minScrollbarLength  : 40,
+                        alwaysVisibleY: true
+                    });
+                }).on('show:after', function () {
+                    this.scroller.update({alwaysVisibleY: true});
+                });
+            }
+            return this.emailMenu;
+        },
+
+        onEmailListMenu: function (str, left, right, textBox) {
+            clearTimeout(this._mentionState.timerEmailList);
+            if (typeof str == 'string') {
+                this._mentionState.emailSearch = {
+                    str: str, left: left, right: right, textBox: textBox,
+                    from: 0, count: 100, isPaginated: undefined, requestNext: undefined
+                };
+                var data = this._mentionState.emailSearch;
+                Common.UI.ExternalUsers.get('mention', undefined, data.from, data.count, data.str);
+            } else {
+                this._mentionState.emailSearch = null;
+                this.emailMenu && this.emailMenu.rendered && this.emailMenu.cmpEl.css('display', 'none');
+            }
+        },
+
+        onEmailListMenuNext: function () {
+            var data = this._mentionState.emailSearch;
+            if (data && data.isPaginated!==undefined) {
+                data.from += data.count;
+                Common.UI.ExternalUsers.get('mention', undefined, data.from, data.count, data.str);
+            }
+        },
+
+        onEmailListMenuCallback: function (type, users, isPaginated) {
+            var search = this._mentionState.emailSearch;
+            if (!search || type && type!=='mention') return;
+
+            var me = this,
+                menu = me.getEmailMenu(),
+                str = search.str,
+                left = search.left,
+                right = search.right,
+                from = search.from,
+                textbox = search.textBox,
+                textboxDom = textbox ? textbox[0] : null,
+                isClientSearch = isPaginated===undefined;
+
+            if (!textboxDom || !document.body.contains(textboxDom)) {
+                this._mentionState.emailSearch = null;
+                return;
+            }
+            search.isPaginated = isPaginated;
+            isClientSearch && (this._mentionState.emailSearch = null);
+
+            var menuContainer = $(Common.Utils.String.format('#menu-container-{0}', menu.id));
+            if (!menu.rendered) {
+                if (menuContainer.length < 1) {
+                    menuContainer = $(Common.Utils.String.format('<div id="menu-container-{0}" style="position: absolute; z-index: 10000;"><div class="dropdown-toggle" data-toggle="dropdown"></div></div>', menu.id));
+                    $(document.body).append(menuContainer);
+                }
+                menu.render(menuContainer);
+                menu.cmpEl.attr({tabindex: "-1"});
+                menu.on('hide:after', function () {
+                    setTimeout(function () {
+                        var s = me._mentionState.lastTextBox;
+                        s && document.body.contains(s[0]) && s.focus();
+                    }, 10);
+                });
+                !isClientSearch && menu.scroller.cmpEl.on('scroll', function (event) {
+                    var es = me._mentionState.emailSearch;
+                    if (es && es.requestNext>0 && es.requestNext < $(event.target).scrollTop()) {
+                        es.requestNext = -1;
+                        me.onEmailListMenuNext();
+                    }
+                });
+            }
+            me._mentionState.lastTextBox = textbox;
+            menu.cmpEl.css('min-width', Math.max(textboxDom.clientWidth, 220));
+
+            if (isClientSearch || from===0) {
+                for (var i = 0; i < menu.items.length; i++) {
+                    menu.removeItem(menu.items[i]);
+                    i--;
+                }
+            }
+
+            if (users && users.length>0) {
+                if (isClientSearch) {
+                    str = str.toLowerCase();
+                    if (str.length>0) {
+                        users = _.filter(users, function (item) {
+                            if (item.email && 0 === item.email.toLowerCase().indexOf(str)) return true;
+                            var arr = item.name ? item.name.toLowerCase().split(' ') : [];
+                            for (var k=0; k<arr.length; k++) {
+                                if (0 === arr[k].indexOf(str)) return true;
+                            }
+                            return false;
+                        });
+                    }
+                }
+                var tpl = _.template('<a id="<%= id %>" tabindex="-1" type="menuitem">' +
+                                        '<div style="overflow: hidden; text-overflow: ellipsis; max-width: 195px;"><%= Common.Utils.String.htmlEncode(caption) %></div>' +
+                                        '<div style="overflow: hidden; text-overflow: ellipsis; max-width: 195px; color: #909090;"><%= Common.Utils.String.htmlEncode(options.value) %></div>' +
+                                    '</a>'),
+                    divider = false;
+                _.each(users, function (menuItem) {
+                    if (divider && !menuItem.hasAccess) {
+                        divider = false;
+                        menu.addItem(new Common.UI.MenuItem({caption: '--'}));
+                    }
+                    if (menuItem.email && menuItem.name) {
+                        var mnu = new Common.UI.MenuItem({
+                            caption     : menuItem.name,
+                            value       : menuItem.email,
+                            template    : tpl
+                        }).on('click', function (item) {
+                            me.insertEmailToTextbox(textbox, item.options.value, left, right);
+                        });
+                        menu.addItem(mnu);
+                        if (menuItem.hasAccess)
+                            divider = true;
+                    }
+                });
+            }
+
+            if (menu.items.length>0) {
+                menu.menuAlignEl = textbox;
+                menu.show();
+                menu.cmpEl.css('display', '');
+                menu.alignPosition('bl-tl', -5);
+                menu.scroller.update({alwaysVisibleY: true});
+                if (!isClientSearch) {
+                    (from===0) && menu.scroller.scrollTop(0);
+                    search.requestNext = users && users.length>0 ? (1 - 10/menu.items.length) * menu.cmpEl.get(0).scrollHeight : -1;
+                }
+            } else {
+                menu.rendered && menu.cmpEl.css('display', 'none');
+            }
+        },
+
+        insertEmailToTextbox: function (textBox, str, left, right) {
+            if (!textBox || !document.body.contains(textBox[0])) return;
+            var val = textBox.val();
+            textBox.val(val.substring(0, left) + '+' + str + ' ' + val.substring(right+1, val.length));
+            setTimeout(function () {
+                textBox[0].selectionStart = textBox[0].selectionEnd = left + str.length + 2;
+            }, 10);
         },
 
         setupLayout: function () {
