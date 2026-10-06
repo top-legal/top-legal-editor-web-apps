@@ -183,6 +183,7 @@ define([
 
             if (data) {
                 this.currentUserId      =   data.config.user.id;
+                this.eoCurrentUserEmail =   (data.config.user.email || '').toLowerCase(); // top.legal: "Mentioning me" filter
                 this.sdkViewName        =   data['sdkviewname'] || this.sdkViewName;
                 this.hintmode           =   data['hintmode'] || false;
                 this.fullInfoHintMode   =   data['fullInfoHintMode'] || false;
@@ -1006,6 +1007,7 @@ define([
                     needSort = (this.getComparator() == 'author-asc' || this.getComparator() == 'author-desc') && (data.asc_getUserName() !== comment.get('username')) ||
                                 hideComment !== comment.get('hide');
                 comment.set('comment',  data.asc_getText());
+                comment.set('eoMentionsMe', t.eoDataMentionsMe(data));
                 comment.set('userid',   userid);
                 comment.set('username', data.asc_getUserName());
                 comment.set('initials', Common.Utils.getUserInitials(AscCommon.UserInfoParser.getParsedName(data.asc_getUserName())));
@@ -1028,7 +1030,7 @@ define([
                     t.fillUserGroups(usergroups);
                     var group = Common.Utils.InternalSettings.get(t.appPrefix + "comments-filtergroups");
                     var groupFilter = !!group && (group !== -1) && (!usergroups || usergroups.length < 1 || usergroups.indexOf(group) < 0);
-                    var typeFilter = (t.currentTypeFilter === 'open' && comment.get('resolved')) || (t.currentTypeFilter === 'resolved' && !comment.get('resolved'));
+                    var typeFilter = t.eoTypeFiltered(comment);
                     comment.set('filtered', groupFilter || typeFilter);
                 }
 
@@ -1566,6 +1568,7 @@ define([
                 date                : date ? this.dateToLocaleTimeString(date) : null,
                 quote               : data.asc_getQuoteText(),
                 comment             : data.asc_getText(),
+                eoMentionsMe        : this.eoDataMentionsMe(data),
                 resolved            : data.asc_getSolved(),
                 unattached          : !_.isUndefined(data.asc_getDocumentFlag) ? data.asc_getDocumentFlag() : false,
                 userdata            : data.asc_getUserData(),
@@ -1593,7 +1596,7 @@ define([
                     this.fillUserGroups(usergroups);
                     var group = Common.Utils.InternalSettings.get(this.appPrefix + "comments-filtergroups");
                     var groupFilter = !!group && (group !== -1) && (!usergroups || usergroups.length < 1 || usergroups.indexOf(group) < 0);
-                    var typeFilter = (this.currentTypeFilter === 'open' && comment.get('resolved')) || (this.currentTypeFilter === 'resolved' && !comment.get('resolved'));
+                    var typeFilter = this.eoTypeFiltered(comment);
                     comment.set('filtered', groupFilter || typeFilter);
                 }
 
@@ -2028,7 +2031,7 @@ define([
                 var usergroups = item.get('parsedGroups');
 
                 var groupFiltered = !!this.currentGroupFilter && this.currentGroupFilter !== -1 && (!usergroups || usergroups.length < 1 || usergroups.indexOf(this.currentGroupFilter) < 0);
-                var typeFiltered = (this.currentTypeFilter === 'open' && item.get('resolved')) || (this.currentTypeFilter === 'resolved' && !item.get('resolved'));
+                var typeFiltered = this.eoTypeFiltered(item);
                 var shouldFilter = groupFiltered || typeFiltered;
 
                 item.set('filtered', shouldFilter, { silent: true });
@@ -2048,6 +2051,36 @@ define([
             Common.Utils.InternalSettings.set(this.appPrefix + "comments-filtergroups", group);
             this.currentGroupFilter = group;
             this.applyCombinedFilter();
+        },
+
+        // top.legal: status filter plus "Mentioning me" — a thread whose comment or any reply contains
+        // the viewer's address as a +/@ mention (mentions are stored as plain "+email" text).
+        eoTypeFiltered: function (comment) {
+            var type = this.currentTypeFilter;
+            return (type === 'open' && comment.get('resolved')) ||
+                   (type === 'resolved' && !comment.get('resolved')) ||
+                   (type === 'mentions' && !comment.get('eoMentionsMe'));
+        },
+
+        eoDataMentionsMe: function (data) {
+            var email = this.eoCurrentUserEmail;
+            if (!email || !data) return false;
+            var has = function (text) {
+                text = (text || '').toLowerCase();
+                var i = text.indexOf(email);
+                while (i > 0) {
+                    var before = text.charAt(i - 1), after = text.charAt(i + email.length);
+                    if ((before === '+' || before === '@') && !/[a-z0-9._%+-]/.test(after)) return true;
+                    i = text.indexOf(email, i + 1);
+                }
+                return false;
+            };
+            if (has(data.asc_getText())) return true;
+            var n = data.asc_getRepliesCount ? data.asc_getRepliesCount() : 0;
+            for (var r = 0; r < n; r++) {
+                if (has(data.asc_getReply(r).asc_getText())) return true;
+            }
+            return false;
         },
 
         setFilterComments: function (type) {

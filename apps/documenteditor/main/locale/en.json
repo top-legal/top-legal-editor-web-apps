@@ -803,6 +803,7 @@
   "Common.Views.Comments.textClosePanel": "Close comments",
   "Common.Views.Comments.textComment": "Comment",
   "Common.Views.Comments.textComments": "Comments",
+  "Common.Views.Comments.textMentionsMe": "Mentioning me",
   "Common.Views.Comments.textEdit": "OK",
   "Common.Views.Comments.textEnterCommentHint": "Enter your comment here",
   "Common.Views.Comments.textHintAddComment": "Add comment",

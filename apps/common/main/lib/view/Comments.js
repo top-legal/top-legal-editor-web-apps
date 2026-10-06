@@ -438,6 +438,13 @@ define([
                                             toggleGroup: 'filterstatus',
                                             value: 'all',
                                             checked: true
+                                        },
+                                        {
+                                            caption: this.textMentionsMe,
+                                            checkable: true,
+                                            visible: true,
+                                            toggleGroup: 'filterstatus',
+                                            value: 'mentions'
                                         }
                                     ]
                                 })
@@ -1182,6 +1189,7 @@ define([
         },
 
         textComments            : 'Comments',
+        textMentionsMe          : 'Mentioning me',
         textAnonym              : 'Guest',
         textAddCommentToDoc     : 'Add Comment to Document',
         textAddComment          : 'Add Comment',
