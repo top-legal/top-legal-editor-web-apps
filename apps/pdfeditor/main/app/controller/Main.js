@@ -455,6 +455,8 @@ define([
             loadDocument: function(data) {
                 this.permissions = {};
                 this.document = data.doc;
+                // top.legal: internal viewers resolve aliased authors to real names (tl-office eoNames).
+                this.document && this.document.eoNames && Common.Utils.eoInstallAuthorNames(this.document.eoNames);
 
                 var docInfo = {};
 

@@ -255,9 +255,16 @@ define([
         eoGroupUserName: function (scope, name, authorTeam) {
             var P = AscCommon.UserInfoParser;
             var sep = (P.getSeparator && P.getSeparator()) || String.fromCharCode(160);
-            var disp = P.getParsedName((name != null ? name : (P.getCurrentName ? P.getCurrentName() : '')) || '');
+            // Re-group from the RAW name, not getParsedName: for an internal viewer that resolves an
+            // aliased author to the real person (eoInstallAuthorNames), and writing it back would
+            // put the real name into the document the counterparty sees. Keep the "u-<id>" alias
+            // marker too, so the comment stays resolvable after a re-scope.
+            var raw = (name != null ? name : (P.getCurrentName ? P.getCurrentName() : '')) || '';
+            var cut = raw.indexOf(sep);
+            var disp = cut > -1 ? raw.substring(cut + 1) : raw;
+            var keep = ((P.getParsedGroups && P.getParsedGroups(raw)) || []).filter(function (g) { return g.indexOf('u-') === 0; });
             if (authorTeam === undefined) { var own = this.eoDefaultScope(); authorTeam = own === 'shared' ? null : own; }
-            return (scope || 'shared') + (authorTeam ? ',by-' + authorTeam : '') + sep + disp;
+            return (scope || 'shared') + (authorTeam ? ',by-' + authorTeam : '') + (keep.length ? ',' + keep.join(',') : '') + sep + disp;
         },
         // Author team of an existing comment: the "by-" group, else (older comments) an
         // internal/external scope implies its author's team; unknown => null.

@@ -1339,6 +1339,26 @@ define([], function () {
         }
     })();
 
+    // top.legal: comment/redline author alias. tl-office writes an aliased internal author as
+    // "<groups>,u-<userId><NBSP><alias>", so the counterparty only ever receives the alias. For
+    // INTERNAL viewers it also signs document.eoNames ({userId: real name}); this wraps the
+    // display-name parser so those viewers see the real person. Externals never get the map, so
+    // for them this is a no-op. Display only — the stored author name is never rewritten.
+    Common.Utils.eoInstallAuthorNames = function (names) {
+        var P = window.AscCommon && AscCommon.UserInfoParser;
+        if (!P || !names || typeof names !== 'object' || P.eoNamesInstalled) return;
+        var orig = P.getParsedName, groupsOf = P.getParsedGroups;
+        P.eoNamesInstalled = true;
+        P.getParsedName = P['getParsedName'] = function (username) {
+            var groups = (username && groupsOf) ? (groupsOf.call(P, username) || []) : [];
+            for (var i = 0; i < groups.length; i++) {
+                if (groups[i].indexOf('u-') === 0 && names[groups[i].substring(2)])
+                    return names[groups[i].substring(2)];
+            }
+            return orig.apply(P, arguments);
+        };
+    };
+
     Common.Utils.getUserInitials = function (username) {
         var fio = username.split(' ');
         var initials = fio[0].substring(0, 1).toUpperCase();
