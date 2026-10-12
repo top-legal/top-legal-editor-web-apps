@@ -234,7 +234,15 @@ define([
         // Scope ('internal'|'external'|'shared') is stored in the comment's userData
         // (as JSON). userData round-trips through save/reload, unlike the comment guid
         // (m_nDurableId), which is regenerated on load. Absent/invalid => 'shared'.
-        eoDecodeScope: function (userData) {
+        // The author-name group wins over userData: it is what commentGroups actually enforces, and
+        // the PDF editor overwrites userData with the annotation id, so there userData never holds
+        // the scope (the badge showed "Shared" on comments externals could not see).
+        eoDecodeScope: function (userData, username) {
+            var P = AscCommon.UserInfoParser;
+            var groups = (P && P.getParsedGroups && username) ? (P.getParsedGroups(username) || []) : [];
+            if (groups.indexOf('internal') >= 0) return 'internal';
+            if (groups.indexOf('external') >= 0) return 'external';
+            if (groups.indexOf('shared') >= 0) return 'shared';
             try { var o = JSON.parse(userData); if (o && (o.eoScope === 'internal' || o.eoScope === 'external' || o.eoScope === 'shared')) return o.eoScope; } catch (e) { }
             return 'shared';
         },
@@ -1025,7 +1033,7 @@ define([
                 comment.set('resolved', data.asc_getSolved());
                 comment.set('quote',    data.asc_getQuoteText());
                 comment.set('userdata', data.asc_getUserData());
-                comment.set('eoScope',  this.eoDecodeScope(data.asc_getUserData()));   // top.legal: refresh scope badge on any change
+                comment.set('eoScope',  this.eoDecodeScope(data.asc_getUserData(), data.asc_getUserName()));   // top.legal: refresh scope badge on any change
                 comment.set('time',     date ? date.getTime() : null);
                 comment.set('date',     date ? t.dateToLocaleTimeString(date) : null);
                 comment.set('editable', (t.mode.canEditComments || (userid == t.currentUserId)) && AscCommon.UserInfoParser.canEditComment(data.asc_getUserName()));
@@ -1564,7 +1572,7 @@ define([
             var comment = new Common.Models.Comment({
                 uid                 : id,
                 guid                : data.asc_getGuid(),
-                eoScope             : this.eoDecodeScope(data.asc_getUserData()),   // top.legal: scope from userData (round-trips); absent => shared
+                eoScope             : this.eoDecodeScope(data.asc_getUserData(), data.asc_getUserName()),   // top.legal: scope from the author-name group, else userData; absent => shared
                 userid              : userid,
                 username            : data.asc_getUserName(),
                 initials            : Common.Utils.getUserInitials(AscCommon.UserInfoParser.getParsedName(data.asc_getUserName())),
