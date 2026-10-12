@@ -402,7 +402,11 @@ define([
             var pop = (this.popoverComments && this.popoverComments.findWhere) ? this.popoverComments.findWhere({ uid: uid }) : null;
             var src = comment || pop;
             if (!src) return;
-            var ud = this.eoEncodeScope(src.get('userdata'), scope);
+            // PDF editor: userData is the annotation id the SDK uses to find the comment being
+            // edited (EditCommentData). Overwriting it with the scope JSON made the SDK treat the
+            // edit as a new reply, so the author group (= scope) never changed. Scope rides on the
+            // author group only there.
+            var ud = this.isPDFEditor ? String(uid) : this.eoEncodeScope(src.get('userdata'), scope);
             // mirror scope into username group too, so per-team visibility updates with the scope.
             // keep the AUTHOR's team (not the changer's); unknown on legacy shared comments ->
             // the changer's team only if they wrote it.
