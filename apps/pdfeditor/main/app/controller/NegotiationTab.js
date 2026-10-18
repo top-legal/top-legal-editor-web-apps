@@ -91,6 +91,7 @@ define([
             // Called from Toolbar.js mid-construction: an exception here would abort the toolbar
             // build, so anchors fail alone (see DocumentEdits.js for the incident that taught this).
             try { this._bindAnchorEvents(); } catch (e) { /* anchors unavailable, editor unaffected */ }
+            try { this._bindViewEvents(); } catch (e) { /* reading position unavailable, editor unaffected */ }
             return this;
         },
 
@@ -157,6 +158,35 @@ define([
             if (typeof d.requestId === 'string') this._post({ type: 'search:found', requestId: d.requestId, ok: ok, text: hit });
         },
 
+/*
+         * READING POSITION — the host remembers the page the user was on and reopens there.
+         *   tab -> app : view:page { page }   current page changed (1-based), throttled
+         *   app -> tab : view:goto { page }   jump to that page (1-based) once, after open
+         * The host stores it; this frame only reports and obeys. Page granularity: the editor's
+         * public api exposes pages, not scroll offsets.
+         */
+        _bindViewEvents: function () {
+            var me = this;
+            if (!me.api || me._viewBound) return;
+            me._viewBound = true;
+            me.api.asc_registerCallback('asc_onCurrentPage', function (index) {
+                if (typeof index !== 'number' || index < 0) return;
+                clearTimeout(me._viewTimer);
+                me._viewTimer = setTimeout(function () { me._post({ type: 'view:page', page: index + 1 }); }, 300);
+            });
+        },
+
+        _onViewGoto: function (d) {
+            try {
+                var page = Number(d.page);
+                if (!this.api || !isFinite(page) || page < 1) return;
+                var count = this.api.getCountPages ? this.api.getCountPages() : 0;
+                var index = Math.floor(page) - 1;
+                if (count > 0) index = Math.min(index, count - 1);
+                this.api.goToPage(index);
+            } catch (e) { /* stay where the document opened */ }
+        },
+
         _post: function (msg) {
             var origin = this.parentOrigin();
             if (!origin || window.parent === window) return;
@@ -181,6 +211,10 @@ define([
                 }
                 if (d.type === 'search:find') {
                     me._onSearchFind(d);
+                    return;
+                }
+                if (d.type === 'view:goto') {
+                    me._onViewGoto(d);
                     return;
                 }
                 if (d.type !== 'descriptor') return;
