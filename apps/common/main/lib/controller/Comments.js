@@ -213,6 +213,7 @@ define([
 
         setMode: function(mode) {
             this.mode = mode;
+            window.eoMentionTaskEnabled = !!(mode && mode.canRequestSendNotify); // top.legal: see view/Comments.js
             this.isModeChanged = true; // change show-comment mode from/to hint mode using canComments flag
             this.view.viewmode = !this.mode.canComments;
             this.view.changeLayout(mode);

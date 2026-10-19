@@ -48,6 +48,40 @@ define([
 ], function (commentsTemplate, panelTemplate) {
     'use strict';
 
+    /*
+     * top.legal: "also create a task" under every comment box. Shown once the text @-mentions an
+     * address; its state at submit time rides along on requestSendNotify (see pickEMail) and the
+     * host creates the task. One delegated set of handlers covers the panel and the popover.
+     * Enabled by the controller only when the host listens for mentions (canRequestSendNotify).
+     */
+    var EO_MENTION_RE = /\B[@+][A-Z0-9._%+-]+@[A-Z0-9._-]+\.[A-Z]+\b/i,
+        EO_TASK_BOX = 'textarea.msg-reply, textarea#comment-msg-new';
+    function eoMentionTaskLabel() {
+        var lang = (Common.Locale && Common.Locale.getCurrentLanguage && Common.Locale.getCurrentLanguage()) || 'en';
+        return lang.indexOf('de') === 0 ? 'Aufgabe für erwähnte Person erstellen' : 'Create a task for the mentioned person';
+    }
+    function eoSyncMentionTask(textBox) {
+        var $box = $(textBox),
+            $row = $box.next('.eo-mention-task'),
+            show = !!window.eoMentionTaskEnabled && EO_MENTION_RE.test($box.val() || '');
+        if (!$row.length) {
+            if (!show) { window.eoMentionTaskChecked = false; return; }
+            $row = $('<label class="eo-mention-task" style="display:flex;align-items:center;gap:6px;margin:4px 0 2px;font-size:11px;cursor:pointer;user-select:none;">' +
+                '<input type="checkbox" style="margin:0;cursor:pointer;"><span></span></label>');
+            $row.find('span').text(eoMentionTaskLabel());
+            $box.after($row);
+        }
+        $row.css('display', show ? 'flex' : 'none');
+        window.eoMentionTaskChecked = show && $row.find('input').prop('checked');
+    }
+    $(document)
+        .on('input.eomentiontask focus.eomentiontask', EO_TASK_BOX, function () { eoSyncMentionTask(this); })
+        .on('change.eomentiontask', '.eo-mention-task input', function () {
+            eoSyncMentionTask($(this).closest('.eo-mention-task').prev('textarea'));
+        })
+        // keep the popover's textbox focus/blur logic from treating a checkbox click as leaving the box
+        .on('mousedown.eomentiontask', '.eo-mention-task', function (e) { e.stopPropagation(); });
+
     function replaceWords (template, words) {
         var word,
             value,
@@ -1155,7 +1189,14 @@ define([
                 return str.slice(1, str.length);
             });
             arr = _.difference(arr, old_arr);
+            // top.legal: the "create a task" checkbox of the box just submitted (one-shot).
+            var createTask = !!window.eoMentionTaskChecked,
+                record = this.store && this.store.findWhere({guid: commentId});
+            window.eoMentionTaskChecked = false;
             (arr.length>0) && Common.Gateway.requestSendNotify({
+                createTask: createTask,
+                // a brand-new comment is not in the store yet: the host reads the selection instead
+                quote: record ? (record.get('quote') || '') : undefined,
                 emails: arr,
                 actionId: commentId, // comment id
                 actionLink: {
