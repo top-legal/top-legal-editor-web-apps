@@ -140,22 +140,50 @@ define([
          * match and scrolls to it. Replies `search:found { requestId, ok, text? }`.
          */
         _onSearchFind: function (d) {
-            var ok = false, hit;
-            try {
-                var candidates = _.isArray(d.candidates) ? d.candidates : [];
-                if (this.api) {
-                    for (var i = 0; i < candidates.length && !ok; i++) {
-                        var text = candidates[i];
-                        if (typeof text !== 'string' || !text.trim()) continue;
-                        var settings = new AscCommon.CSearchSettings();
-                        settings.put_Text(text.trim());
-                        settings.put_MatchCase(false);
-                        settings.put_WholeWords(false);
-                        if (this.api.asc_findText(settings, true)) { ok = true; hit = text; }
-                    }
+            var me = this;
+            var reply = function (ok, hit) {
+                if (typeof d.requestId === 'string') me._post({ type: 'search:found', requestId: d.requestId, ok: ok, text: hit });
+            };
+            // The PDF viewer's Find is ASYNC until every page's text has been extracted: before that,
+            // asc_findText returns Count 0 and parks the search behind a "waiting" overlay. Wait for
+            // the text layer instead (it is extracted in the background after open), then search.
+            var viewer = null;
+            try { viewer = me.api && me.api.getDocumentRenderer ? me.api.getDocumentRenderer() : null; } catch (e) { viewer = null; }
+            var started = Date.now();
+            var run = function () {
+                if (viewer && !viewer.isFullText) {
+                    if (Date.now() - started < 12000) { setTimeout(run, 150); return; }
+                    reply(false);
+                    return;
                 }
-            } catch (e) { ok = false; }
-            if (typeof d.requestId === 'string') this._post({ type: 'search:found', requestId: d.requestId, ok: ok, text: hit });
+                var ok = false, hit;
+                try {
+                    var candidates = _.isArray(d.candidates) ? d.candidates : [];
+                    if (me.api) {
+                        for (var i = 0; i < candidates.length && !ok; i++) {
+                            var text = candidates[i];
+                            if (typeof text !== 'string' || !text.trim()) continue;
+                            var settings = new AscCommon.CSearchSettings();
+                            settings.put_Text(text.trim());
+                            settings.put_MatchCase(false);
+                            settings.put_WholeWords(false);
+                            if (me.api.asc_findText(settings, true)) { ok = true; hit = text; }
+                        }
+                        // Keep the passage highlighted for a while (like the PDF viewer's flash), then
+                        // drop the search highlight so the document reads normally again.
+                        clearTimeout(me._findClearTimer);
+                        if (ok) {
+                            me._findClearTimer = setTimeout(function () {
+                                try { me.api.asc_endFindText(); } catch (e) { /* ignore */ }
+                            }, 10000);
+                        } else {
+                            me.api.asc_endFindText();
+                        }
+                    }
+                } catch (e) { ok = false; }
+                reply(ok, hit);
+            };
+            run();
         },
 
 /*
